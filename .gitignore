@@ -1,0 +1,11 @@
+# CLion specific IDE config files
+.idea
+
+# Make results
+iso
+*.iso
+*.o
+kernel
+
+# VM files
+*.qcow2

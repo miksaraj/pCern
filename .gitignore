@@ -5,7 +5,7 @@
 iso
 *.iso
 *.o
-kernel
+*.elf
 
 # VM files
 *.qcow2

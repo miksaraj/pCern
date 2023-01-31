@@ -3,17 +3,12 @@ ENTRY(start)
 SECTIONS
 {
     /* begin sections at 1M, since below it is reserved for other x86-related stuff, so we can't use it */
-    . = 1M
+    . = 1M;
 
-    /* read-only multiboot header section first, so the bootloader can find it */
-    .rodata BLOCK(4K) : ALIGN(4K)
-    {
-        *(.multiboot)
-    }
-
-    /* Executable code */
+    /* Multiboot header + executable code */
     .text BLOCK(4K) : ALIGN(4K)
     {
+        *(.multiboot)
         *(.text)
     }
 

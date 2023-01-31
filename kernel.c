@@ -24,7 +24,7 @@ const int VGA_ROWS = 25;
 
 int term_col = 0;
 int term_row = 0;
-uint8_t term_color = 0x0F // Black bg, white fg
+uint8_t term_color = 0x0F; // Black bg, white fg
 
 // Initiate term by clearing it
 void term_init()
@@ -77,7 +77,7 @@ void term_print(const char* str)
     for (size_t i = 0; str[i] != '\0'; ++i) { term_putc(str[i]); }
 }
 
-void kernel_main()
+void main()
 {
     term_init();
 

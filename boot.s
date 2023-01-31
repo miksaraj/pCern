@@ -1,28 +1,31 @@
-.extern kernel_main                             ; main function in kernel.c
+# Constants needed by the multiboot header
+.set ALIGN, 1 << 0                      # align on page boundaries
+.set MEMINFO, 1 << 1                    # memory map
+.set FLAGS, ALIGN | MEMINFO
+.set MAGIC, 0x1BADB002                  # header location for the bootloader
+.set CHECKSUM, -(MAGIC + FLAGS)
 
-.global start                                   ; declare start label as global for linker
-
-.set MB_MAGIC, 0x1BADB002                       ; kernel location for GRUB
-.set MB_FLAGS, (1 << 0) | (1 << 1)
-.set MB_CHECKSUM, (0 - (MB_MAGIC + MB_FLAGS))
-
-.section .multiboot                             ; multiboot header
+# multiboot header
+.section .multiboot
         .align 4
-        .long MB_MAGIC
-        .long MB_FLAGS
-        .long MB_CHECKSUM
+        .long MAGIC
+        .long FLAGS
+        .long CHECKSUM
 
 .section .bss
         .align 16
         stack_bottom:
-                .skip 4096                      ; reserve a 4K stack
+                .skip 16384             # reserve a 16 KiB stack
         stack_top:
 
 .section .text
+        .global start
+        .type start, @function
         start:
-                mov $stack_top, %esp            ; set up the stack for our kernel code
-                call kernel_main
-                hang:                           ; if kernel code ever returns, we hang CPU
-                        cli                     ; disable CPU interrupts
-                        hlt                     ; halt the CPU
-                        jmp hang                ; loop around and try again, if not hung
+                mov $stack_top, %esp    # set up the stack for our kernel code
+                call main
+                cli                     # disable CPU interrupts
+1:              hlt                     # halt the CPU
+                jmp 1b                  # loop around and try again, if not hung
+
+.size start, . - start

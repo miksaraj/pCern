@@ -1,8 +1,10 @@
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
+COMPILE := i386-elf-gcc -std=gnu99 -ffreestanding -g
+LINK := i386-elf-gcc -ffreestanding -nostdlib -g -T
 
-BIN = kernel
+BIN = pcern.elf
 CFG = grub.cfg
 ISO_PATH := iso
 BOOT_PATH := $(ISO_PATH)/boot
@@ -12,21 +14,21 @@ GRUB_PATH := $(BOOT_PATH)/grub
 all: bootloader kernel linker iso
 	@echo Make has completed.
 
-bootloader: boot.asm
-	nasm -f elf32 boot.asm -o boot.o
+bootloader: boot.s
+	$(COMPILE) -c boot.s -o boot.o
 
 kernel: kernel.c
-	gcc -m32 -c kernel.c -o kernel.o
+	$(COMPILE) -c kernel.c -o kernel.o
 
 linker: linker.ld boot.o kernel.o
-	ld -m elf_i386 -T linker.ld -o kernel boot.o kernel.o
+	$(LINK) linker.ld boot.o kernel.o -o pcern.elf -lgcc
 
-iso: kernel
+iso: pcern.elf
 	$(MKDIR) $(GRUB_PATH)
 	$(CP) $(BIN) $(BOOT_PATH)
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-file --is-x86-multiboot $(BOOT_PATH)/$(BIN)
-	grub-mkrescue -o pcern.iso $(ISO_PATH)
+	grub-mkrescue $(ISO_PATH) -o pcern-i386.iso
 
 .PHONY: clean
 clean:

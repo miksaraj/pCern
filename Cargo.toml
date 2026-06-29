@@ -1,0 +1,16 @@
+[package]
+name = "pcern"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pcern"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true

@@ -9,3 +9,6 @@ iso
 
 # VM files
 *.qcow2
+
+# Rust build artifacts
+/target

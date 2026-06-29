@@ -1,33 +1,38 @@
-ENTRY(start)
+ENTRY(_start)
 
 SECTIONS
 {
-    /* begin sections at 1M, since below it is reserved for other x86-related stuff, so we can't use it */
+    /* begin sections at 1M; everything below is reserved for the BIOS/bootloader */
     . = 1M;
 
-    /* Multiboot header + executable code */
-    .text BLOCK(4K) : ALIGN(4K)
+    .text ALIGN(4K) :
     {
         *(.multiboot)
-        *(.text)
+        *(.text .text.*)
     }
 
-    /* Read-only data */
-    .rodata BLOCK(4K) : ALIGN(4K)
+    .rodata ALIGN(4K) :
     {
-        *(.rodata)
+        *(.rodata .rodata.*)
     }
 
-    /* Read-write data (initialized) */
-    .data BLOCK(4K) : ALIGN(4K)
+    .data ALIGN(4K) :
     {
-        *(.data)
+        *(.data .data.*)
     }
 
-    /* Read-write data (uninitialized) & stack */
-    .bss BLOCK(4K) : ALIGN(4K)
+    .bss ALIGN(4K) :
     {
         *(COMMON)
-        *(.bss)
+        *(.bss .bss.*)
+    }
+
+    /DISCARD/ :
+    {
+        *(.eh_frame)
+        *(.comment)
+        *(.note.*)
+        *(.got)
+        *(.got.plt)
     }
 }

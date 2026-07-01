@@ -5,6 +5,7 @@ global_asm!(include_str!("gdt_asm.s"));
 
 extern "C" {
     fn gdt_flush(ptr: *const GdtPointer);
+    fn tss_flush();
 }
 
 #[repr(C, packed)]
@@ -37,26 +38,145 @@ struct GdtPointer {
     base: u32,
 }
 
+/// A 32-bit TSS. This kernel never uses hardware task-switching -- the only
+/// fields that matter are `ss0`/`esp0`, which the CPU consults automatically
+/// on any ring3->ring0 transition (interrupt/exception/syscall) to find the
+/// kernel stack to switch to. `set_kernel_stack` updates `esp0` on every
+/// task switch to point at whichever task is about to run.
+#[repr(C, packed)]
+struct Tss {
+    prev_task: u32,
+    esp0: u32,
+    ss0: u32,
+    esp1: u32,
+    ss1: u32,
+    esp2: u32,
+    ss2: u32,
+    cr3: u32,
+    eip: u32,
+    eflags: u32,
+    eax: u32,
+    ecx: u32,
+    edx: u32,
+    ebx: u32,
+    esp: u32,
+    ebp: u32,
+    esi: u32,
+    edi: u32,
+    es: u32,
+    cs: u32,
+    ss: u32,
+    ds: u32,
+    fs: u32,
+    gs: u32,
+    ldt: u32,
+    trap: u16,
+    iomap_base: u16,
+}
+
+impl Tss {
+    const fn zero() -> Self {
+        Tss {
+            prev_task: 0,
+            esp0: 0,
+            ss0: 0,
+            esp1: 0,
+            ss1: 0,
+            esp2: 0,
+            ss2: 0,
+            cr3: 0,
+            eip: 0,
+            eflags: 0,
+            eax: 0,
+            ecx: 0,
+            edx: 0,
+            ebx: 0,
+            esp: 0,
+            ebp: 0,
+            esi: 0,
+            edi: 0,
+            es: 0,
+            cs: 0,
+            ss: 0,
+            ds: 0,
+            fs: 0,
+            gs: 0,
+            ldt: 0,
+            trap: 0,
+            iomap_base: 0,
+        }
+    }
+}
+
 pub const CODE_SEG: u16 = 0x08;
-#[allow(dead_code)]
 pub const DATA_SEG: u16 = 0x10;
+/// RPL 3 already folded in -- these are the literal selector values loaded
+/// into cs/ss (etc.) when entering ring 3. The actual loads happen directly
+/// in enter_ring3 (task_asm.s, as 0x1B/0x23) since that's plain assembly and
+/// can't reference these; kept here so the GDT layout is documented in one
+/// place and to catch layout drift if the entries above ever move.
+#[allow(dead_code)]
+pub const USER_CODE_SEG: u16 = 0x18 | 3;
+#[allow(dead_code)]
+pub const USER_DATA_SEG: u16 = 0x20 | 3;
+// The TSS descriptor's selector (0x28) is hardcoded directly in tss_flush
+// (gdt_asm.s), which is the only place that needs it.
 
 const ACCESS_CODE: u8 = 0x9A; // present, ring0, executable, readable
 const ACCESS_DATA: u8 = 0x92; // present, ring0, writable
+const ACCESS_USER_CODE: u8 = 0xFA; // present, ring3, executable, readable
+const ACCESS_USER_DATA: u8 = 0xF2; // present, ring3, writable
+const ACCESS_TSS: u8 = 0x89; // present, ring0, 32-bit TSS (available)
 const FLAGS_32BIT_4K: u8 = 0xC; // 32-bit segment, 4 KiB granularity
 
-const GDT_ENTRIES: usize = 3;
+const GDT_ENTRIES: usize = 6;
 
 static mut GDT: [GdtEntry; GDT_ENTRIES] = [
     GdtEntry::new(0, 0, 0, 0),
     GdtEntry::new(0, 0xFFFFF, ACCESS_CODE, FLAGS_32BIT_4K),
     GdtEntry::new(0, 0xFFFFF, ACCESS_DATA, FLAGS_32BIT_4K),
+    GdtEntry::new(0, 0xFFFFF, ACCESS_USER_CODE, FLAGS_32BIT_4K),
+    GdtEntry::new(0, 0xFFFFF, ACCESS_USER_DATA, FLAGS_32BIT_4K),
+    GdtEntry::new(0, 0, 0, 0), // TSS descriptor, filled in at init() (base = runtime address)
 ];
 
+static mut TSS: Tss = Tss::zero();
+
+extern "C" {
+    /// The boot stack set up in boot.s, still valid for as long as the
+    /// kernel runs. Used as a placeholder `esp0` until the scheduler's
+    /// first `set_kernel_stack` call.
+    static stack_top: u8;
+}
+
 pub fn init() {
+    unsafe {
+        let tss_base = core::ptr::addr_of!(TSS) as u32;
+        let tss_limit = (size_of::<Tss>() - 1) as u32;
+        GDT[5] = GdtEntry::new(tss_base, tss_limit, ACCESS_TSS, 0);
+        TSS.ss0 = DATA_SEG as u32;
+        // Never leave esp0 at 0: a ring3->ring0 transition before the
+        // scheduler's first activate() call would otherwise load esp0=0 as
+        // the kernel stack pointer, corrupting memory at address 0 instead
+        // of failing in a diagnosable way. Not reachable today (no ring-3
+        // code runs before scheduler::start()), but costs nothing to guard.
+        TSS.esp0 = core::ptr::addr_of!(stack_top) as u32;
+        TSS.iomap_base = size_of::<Tss>() as u16; // past the limit: no I/O bitmap
+    }
+
     let ptr = GdtPointer {
         limit: (size_of::<[GdtEntry; GDT_ENTRIES]>() - 1) as u16,
         base: core::ptr::addr_of!(GDT) as u32,
     };
-    unsafe { gdt_flush(&ptr) };
+    unsafe {
+        gdt_flush(&ptr);
+        tss_flush();
+    }
+}
+
+/// Points the TSS at the given ring0 stack, used the next time a
+/// ring3->ring0 transition (interrupt, exception, or syscall) occurs.
+/// Called by the scheduler on every task switch.
+pub fn set_kernel_stack(esp0: u32) {
+    unsafe { TSS.esp0 = esp0 };
 }

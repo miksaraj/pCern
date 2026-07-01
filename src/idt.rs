@@ -52,29 +52,35 @@ struct IdtPointer {
 
 const IDT_ENTRIES: usize = 256;
 const GATE_INTERRUPT_32: u8 = 0x8E; // present, ring0, 32-bit interrupt gate
+/// Same, but DPL=3: lets ring-3 code reach this vector directly via `int`,
+/// used only for the syscall gate.
+const GATE_INTERRUPT_32_DPL3: u8 = 0xEE;
 
 static mut IDT: [IdtEntry; IDT_ENTRIES] = [IdtEntry::MISSING; IDT_ENTRIES];
 
-fn set_gate(vector: u8, handler_addr: u32) {
+fn set_gate(vector: u8, handler_addr: u32, type_attr: u8) {
     unsafe {
-        IDT[vector as usize] = IdtEntry::new(handler_addr, gdt::CODE_SEG, GATE_INTERRUPT_32);
+        IDT[vector as usize] = IdtEntry::new(handler_addr, gdt::CODE_SEG, type_attr);
     }
 }
 
 pub fn init() {
     use crate::exceptions;
     use crate::keyboard;
+    use crate::syscall;
     use crate::timer;
 
-    set_gate(0, exceptions::divide_by_zero as *const () as u32);
-    set_gate(3, exceptions::breakpoint as *const () as u32);
-    set_gate(6, exceptions::invalid_opcode as *const () as u32);
-    set_gate(8, exceptions::double_fault as *const () as u32);
-    set_gate(13, exceptions::general_protection_fault as *const () as u32);
-    set_gate(14, exceptions::page_fault as *const () as u32);
+    set_gate(0, exceptions::divide_by_zero as *const () as u32, GATE_INTERRUPT_32);
+    set_gate(3, exceptions::breakpoint as *const () as u32, GATE_INTERRUPT_32);
+    set_gate(6, exceptions::invalid_opcode as *const () as u32, GATE_INTERRUPT_32);
+    set_gate(8, exceptions::double_fault as *const () as u32, GATE_INTERRUPT_32);
+    set_gate(13, exceptions::general_protection_fault as *const () as u32, GATE_INTERRUPT_32);
+    set_gate(14, exceptions::page_fault as *const () as u32, GATE_INTERRUPT_32);
 
-    set_gate(32, timer::handler as *const () as u32); // IRQ0, remapped
-    set_gate(33, keyboard::handler as *const () as u32); // IRQ1, remapped
+    set_gate(32, timer::handler as *const () as u32, GATE_INTERRUPT_32); // IRQ0, remapped
+    set_gate(33, keyboard::handler as *const () as u32, GATE_INTERRUPT_32); // IRQ1, remapped
+
+    set_gate(0x80, syscall::syscall_isr as *const () as u32, GATE_INTERRUPT_32_DPL3);
 
     let ptr = IdtPointer {
         limit: (size_of::<[IdtEntry; IDT_ENTRIES]>() - 1) as u16,

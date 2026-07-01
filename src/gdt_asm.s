@@ -19,3 +19,14 @@ gdt_flush:
 gdt_flush_ret:
     ret
 .size gdt_flush, . - gdt_flush
+
+# void tss_flush() -- cdecl. Loads the task register with the TSS descriptor
+# (GDT entry 5, selector 0x28); the CPU then knows where to find ss0/esp0 on
+# a ring3->ring0 transition.
+.global tss_flush
+.type tss_flush, @function
+tss_flush:
+    mov ax, 0x28
+    ltr ax
+    ret
+.size tss_flush, . - tss_flush

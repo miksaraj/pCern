@@ -6,7 +6,9 @@ use crate::sync::Mutex;
 
 pub const VGA_WIDTH: usize = 80;
 pub const VGA_HEIGHT: usize = 25;
-const VGA_BUFFER_ADDR: usize = 0xB8000;
+/// Physical 0xB8000 through the kernel's high-half identity alias — the low
+/// identity mapping is dropped right after paging turns on (see boot.s).
+const VGA_BUFFER_ADDR: usize = 0xC00B8000;
 
 /// The 16 colors available in VGA text mode. Background colors only use the
 /// low 3 bits on real hardware unless the attribute controller's blink bit
@@ -207,6 +209,10 @@ impl Writer {
     }
 
     pub fn put_char(&mut self, c: u8) {
+        // Mirrored here (post-ANSI-parsing, so it's plain text) rather than
+        // in feed_byte, purely as a debug console that never scrolls out of
+        // reach the way the 80x25 VGA buffer does.
+        crate::serial::write_byte(c);
         match c {
             b'\n' => self.new_line(),
             b'\r' => self.col = 0,

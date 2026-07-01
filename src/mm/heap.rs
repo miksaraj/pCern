@@ -9,6 +9,18 @@ struct FreeBlock {
     next: Option<NonNull<FreeBlock>>,
 }
 
+/// Every free region's address and size are kept a multiple of this. As
+/// long as every allocation's *size* is also rounded up to a multiple of
+/// this (done in `alloc`/`dealloc` below) and its alignment doesn't exceed
+/// it (true for everything this heap currently serves -- page-aligned
+/// buffers go through the frame allocator instead), a split's front excess
+/// is always exactly 0 and its back excess is always itself a multiple of
+/// `MIN_BLOCK_ALIGN`, so it's either 0 or large enough to hold a
+/// `FreeBlock` header. Without this, alignment padding could produce
+/// leftover slivers smaller than a `FreeBlock` that `add_free_region`
+/// can't track and so permanently leaks.
+const MIN_BLOCK_ALIGN: usize = 8;
+
 /// A first-fit free-list allocator: no coalescing of adjacent freed blocks,
 /// which trades some fragmentation over long runs for a much smaller
 /// implementation. Good enough for kernel-internal bookkeeping structures;
@@ -66,6 +78,12 @@ impl LinkedListHeap {
                         None => self.head = next,
                     }
 
+                    // With size/address kept MIN_BLOCK_ALIGN-aligned
+                    // throughout (see its doc comment), excess_front is 0
+                    // and excess_back is a multiple of MIN_BLOCK_ALIGN for
+                    // every request this heap actually serves today; the
+                    // >0 checks are only a safety net for align >
+                    // MIN_BLOCK_ALIGN, which nothing currently requests.
                     if excess_front > 0 {
                         self.add_free_region(region_start, excess_front);
                     }
@@ -94,16 +112,25 @@ impl LockedHeap {
     /// # Safety
     /// `start` must point to at least `size` bytes of otherwise-unused,
     /// valid, writable, already-mapped memory, and this must be called
-    /// exactly once before any allocation is attempted.
+    /// exactly once before any allocation is attempted. `start` must be
+    /// aligned to `MIN_BLOCK_ALIGN` (see its doc comment).
     pub unsafe fn init(&self, start: *mut u8, size: usize) {
+        assert_eq!(start as usize % MIN_BLOCK_ALIGN, 0, "heap start must be MIN_BLOCK_ALIGN-aligned");
+        let size = size & !(MIN_BLOCK_ALIGN - 1);
         self.0.lock().add_free_region(start as usize, size);
     }
 }
 
+/// Rounds `size` up to a multiple of `MIN_BLOCK_ALIGN`, matching the
+/// invariant every free region in this heap is kept to.
+fn round_up_min_block(size: usize) -> usize {
+    (size + MIN_BLOCK_ALIGN - 1) & !(MIN_BLOCK_ALIGN - 1)
+}
+
 unsafe impl GlobalAlloc for LockedHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let size = layout.size().max(mem::size_of::<FreeBlock>());
-        let align = layout.align().max(mem::align_of::<FreeBlock>());
+        let size = round_up_min_block(layout.size().max(mem::size_of::<FreeBlock>()));
+        let align = layout.align().max(MIN_BLOCK_ALIGN);
         match self.0.lock().find_region(size, align) {
             Some(start) => start as *mut u8,
             None => core::ptr::null_mut(),
@@ -111,7 +138,11 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let size = layout.size().max(mem::size_of::<FreeBlock>());
+        // Must recompute the exact same (rounded) size alloc() reserved --
+        // handing back only layout.size() would understate what's actually
+        // free and leak the rounding padding right back into the same bug
+        // this rounding exists to close.
+        let size = round_up_min_block(layout.size().max(mem::size_of::<FreeBlock>()));
         self.0.lock().add_free_region(ptr as usize, size);
     }
 }

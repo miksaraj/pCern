@@ -109,3 +109,34 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
     // Resumed only once a matching send already wrote our result into
     // `regs` and woke us -- nothing left to do.
 }
+
+/// Called when `task_id` exits: without this, a task blocked waiting to
+/// send to or receive from `task_id` would never be matched (its partner
+/// is gone) and would stay `Blocked` forever with no error and no wake, a
+/// silent permanent hang. Wakes every such waiter with a failure
+/// (`eax = u32::MAX`, matching the "unknown syscall" sentinel elsewhere)
+/// instead, and drops the now-meaningless pending entries.
+pub fn task_exited(task_id: TaskId) {
+    let mut recvs = PENDING_RECVS.lock();
+    recvs.retain(|r| {
+        if r.filter == Some(task_id) {
+            unsafe { (*r.regs).eax = u32::MAX };
+            scheduler::wake(r.task_id);
+            false
+        } else {
+            true
+        }
+    });
+    drop(recvs);
+
+    let mut sends = PENDING_SENDS.lock();
+    sends.retain(|s| {
+        if s.dest == task_id {
+            unsafe { (*s.regs).eax = u32::MAX };
+            scheduler::wake(s.task_id);
+            false
+        } else {
+            true
+        }
+    });
+}

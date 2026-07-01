@@ -142,12 +142,25 @@ static mut GDT: [GdtEntry; GDT_ENTRIES] = [
 
 static mut TSS: Tss = Tss::zero();
 
+extern "C" {
+    /// The boot stack set up in boot.s, still valid for as long as the
+    /// kernel runs. Used as a placeholder `esp0` until the scheduler's
+    /// first `set_kernel_stack` call.
+    static stack_top: u8;
+}
+
 pub fn init() {
     unsafe {
         let tss_base = core::ptr::addr_of!(TSS) as u32;
         let tss_limit = (size_of::<Tss>() - 1) as u32;
         GDT[5] = GdtEntry::new(tss_base, tss_limit, ACCESS_TSS, 0);
         TSS.ss0 = DATA_SEG as u32;
+        // Never leave esp0 at 0: a ring3->ring0 transition before the
+        // scheduler's first activate() call would otherwise load esp0=0 as
+        // the kernel stack pointer, corrupting memory at address 0 instead
+        // of failing in a diagnosable way. Not reachable today (no ring-3
+        // code runs before scheduler::start()), but costs nothing to guard.
+        TSS.esp0 = core::ptr::addr_of!(stack_top) as u32;
         TSS.iomap_base = size_of::<Tss>() as u16; // past the limit: no I/O bitmap
     }
 

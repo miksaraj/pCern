@@ -52,13 +52,18 @@ impl MultibootInfo {
 
     /// Total usable RAM in bytes, approximated as 1 MiB + `mem_upper` KiB
     /// (the conventional lower/upper split multiboot1 reports); does not
-    /// account for any holes reported in the full memory map.
-    pub fn total_memory_bytes(&self) -> usize {
+    /// account for any holes reported in the full memory map. Returns
+    /// `None` if the bootloader didn't report memory size at all (the
+    /// `FLAG_MEM` bit unset) -- callers should treat that as a hard error
+    /// rather than silently proceeding with a 0-frame allocator, which
+    /// would otherwise surface many steps later as a confusing "out of
+    /// physical memory" panic on the very first allocation.
+    pub fn total_memory_bytes(&self) -> Option<usize> {
         let info = unsafe { &*self.raw };
         if info.flags & FLAG_MEM == 0 {
-            return 0;
+            return None;
         }
-        (1024 * 1024) + (info.mem_upper as usize * 1024)
+        Some((1024 * 1024) + (info.mem_upper as usize * 1024))
     }
 
     #[allow(dead_code)]

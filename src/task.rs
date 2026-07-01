@@ -9,6 +9,10 @@ global_asm!(include_str!("task_asm.s"));
 pub type TaskId = usize;
 
 const KERNEL_STACK_SIZE: usize = 16 * 1024;
+/// Reserved bit 1 (always 1) + IF: a freshly created task starts with
+/// interrupts enabled, matching switch_to's popfd expecting an EFLAGS slot
+/// in the fabricated initial stack (see task_asm.s).
+const INITIAL_EFLAGS: usize = 0x202;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum TaskState {
@@ -71,9 +75,9 @@ impl Task {
     /// Builds a new kernel-mode task ready to run `entry` (which must never
     /// return). The initial stack is hand-constructed to look exactly like
     /// a task that already called into `switch_to` and is about to `ret`
-    /// into `task_trampoline`: 4 saved registers, then `task_trampoline`'s
-    /// address, then task_trampoline's own (unused) return slot, then its
-    /// real cdecl argument.
+    /// into `task_trampoline`: 4 saved registers, then a saved EFLAGS, then
+    /// `task_trampoline`'s address, then task_trampoline's own (unused)
+    /// return slot, then its real cdecl argument.
     pub fn new_kernel(entry: extern "C" fn() -> !) -> Task {
         let (stack, stack_top) = new_stack();
 
@@ -89,6 +93,7 @@ impl Task {
         push(entry as usize); // task_trampoline's argument, ends up at [esp+4]
         push(0); // task_trampoline's own "return address" (unused)
         push(task_trampoline as *const () as usize); // switch_to's `ret` target
+        push(INITIAL_EFLAGS); // popfd
         push(0); // ebp
         push(0); // ebx
         push(0); // esi
@@ -120,6 +125,7 @@ impl Task {
         push(entry_eip as usize); // enter_ring3's 1st argument
         push(0); // enter_ring3's own (unused) return slot
         push(enter_ring3 as *const () as usize); // switch_to's `ret` target
+        push(INITIAL_EFLAGS); // popfd
         push(0); // ebp
         push(0); // ebx
         push(0); // esi

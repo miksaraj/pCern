@@ -108,6 +108,14 @@ impl PageDirectory {
         unsafe {
             let pde = *table.add(pd_index);
             let pt_phys = if pde & PAGE_PRESENT != 0 {
+                // The CPU ANDs the PDE's and PTE's user bits together, so a
+                // PDE left at kernel-only (because an earlier mapping in
+                // this same 4 MiB region didn't need user access) would
+                // silently deny ring-3 access to this page regardless of
+                // its own PTE bit. Upgrade it if this mapping needs it.
+                if user && pde & PAGE_USER == 0 {
+                    *table.add(pd_index) = pde | PAGE_USER;
+                }
                 (pde & PAGE_ADDR_MASK) as usize
             } else {
                 let new_pt = frame::alloc_frame().expect("out of physical memory");
@@ -134,5 +142,56 @@ impl PageDirectory {
 
     pub fn phys_addr(&self) -> usize {
         self.phys_frame
+    }
+}
+
+/// Checks that every page covering `[vaddr, vaddr + len)` is present and
+/// marked user-accessible (both PDE and PTE) in whichever page directory
+/// CR3 currently points at. Used to validate a raw pointer/length a ring-3
+/// task passes to a syscall before the kernel dereferences it directly --
+/// without this, a syscall like debug_write would happily read out
+/// whatever kernel memory a task pointed it at (the kernel's own mapping
+/// is present in every address space) or crash the whole kernel by
+/// dereferencing an unmapped address from kernel mode.
+pub fn current_range_is_user_accessible(vaddr: usize, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let end = match vaddr.checked_add(len) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    let cr3 = unsafe {
+        let value: u32;
+        asm!("mov {0}, cr3", out(reg) value, options(nomem, nostack, preserves_flags));
+        value as usize
+    };
+    let table = phys_to_virt(cr3) as *const u32;
+
+    let mut page = vaddr & !(FRAME_SIZE - 1);
+    let last_page = (end - 1) & !(FRAME_SIZE - 1);
+    loop {
+        let pd_index = page >> 22;
+        let pt_index = (page >> 12) & 0x3FF;
+        unsafe {
+            let pde = *table.add(pd_index);
+            // A present 4 MiB (PSE) PDE means this range falls in the
+            // kernel/boot mapping, which is never marked user-accessible
+            // (see boot.s / PageDirectory::new) -- reject it rather than
+            // misreading the PDE's physical-base bits as a page-table.
+            if pde & PAGE_PRESENT == 0 || pde & PAGE_USER == 0 || pde & 0x80 != 0 {
+                return false;
+            }
+            let pt = phys_to_virt((pde & PAGE_ADDR_MASK) as usize) as *const u32;
+            let pte = *pt.add(pt_index);
+            if pte & PAGE_PRESENT == 0 || pte & PAGE_USER == 0 {
+                return false;
+            }
+        }
+        if page >= last_page {
+            return true;
+        }
+        page += FRAME_SIZE;
     }
 }

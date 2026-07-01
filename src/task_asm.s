@@ -1,28 +1,42 @@
 # void switch_to(usize *old_esp, usize new_esp) -- cdecl
 #
-# Saves the four callee-saved GP registers onto the outgoing task's stack,
-# stashes the resulting esp through `old_esp`, then loads `new_esp` and pops
-# the same four registers back off -- resuming whatever task last suspended
-# itself here (or, for a brand new task, "returning" into task_trampoline
-# via the fabricated initial stack built in task.rs).
+# Saves EFLAGS and the four callee-saved GP registers onto the outgoing
+# task's stack, stashes the resulting esp through `old_esp`, then loads
+# `new_esp` and pops the same values back off -- resuming whatever task
+# last suspended itself here (or, for a brand new task, "returning" into
+# task_trampoline/enter_ring3 via the fabricated initial stack built in
+# task.rs).
+#
+# EFLAGS (specifically IF) MUST be part of the saved context here: IF is a
+# single machine-wide flag, not something the CPU tracks per stack. A task
+# switch driven by the timer IRQ always runs with IF=0 (interrupt gates
+# clear it on entry), and a switch away from a task always leaves whatever
+# IF value was current at that moment; without pushfd/popfd here, resuming
+# a task that was last suspended via a *voluntary* yield/IPC block (a plain
+# call/ret chain, not an interrupt, so there's no iretd to restore eflags)
+# would silently inherit IF=0 from an unrelated preempting context and
+# never re-enable interrupts again -- the timer and keyboard would go dead
+# kernel-wide the first time that combination of switches occurred.
 .global switch_to
 .type switch_to, @function
 switch_to:
+    pushfd
     push ebp
     push ebx
     push esi
     push edi
 
-    mov eax, [esp + 20]      # old_esp (4 pushed regs + return addr = +20)
+    mov eax, [esp + 24]      # old_esp (5 pushed words + return addr = +24)
     mov [eax], esp
 
-    mov eax, [esp + 24]      # new_esp
+    mov eax, [esp + 28]      # new_esp
     mov esp, eax
 
     pop edi
     pop esi
     pop ebx
     pop ebp
+    popfd
     ret
 .size switch_to, . - switch_to
 

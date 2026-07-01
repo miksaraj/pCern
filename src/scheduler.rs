@@ -2,6 +2,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use crate::gdt;
+use crate::ipc;
 use crate::mm::paging;
 use crate::sync::Mutex;
 use crate::task::{Task, TaskId, TaskState};
@@ -120,6 +121,10 @@ pub fn yield_now() {
 /// e.g. waiting on an IPC rendezvous -- see ipc.rs) and switches to the
 /// next ready task. Returns the id of the task that just blocked (i.e. the
 /// caller) once something calls `wake` on it and it runs again.
+///
+/// Relies on `main.rs` always keeping a permanent idle task in the
+/// rotation (one that never itself blocks or exits) so the ready queue is
+/// never empty here -- see the `.expect()` below.
 pub fn block_current() -> TaskId {
     let (blocked_id, old_esp_ptr, new_esp) = {
         let mut sched = SCHEDULER.lock();
@@ -130,7 +135,7 @@ pub fn block_current() -> TaskId {
         let next_id = sched
             .ready_queue
             .pop_front()
-            .expect("no other tasks to run while blocking");
+            .expect("no other tasks to run while blocking (missing idle task?)");
         let next_idx = sched.index_of(next_id);
         sched.tasks[next_idx].state = TaskState::Running;
         sched.current = Some(next_id);
@@ -159,6 +164,10 @@ pub fn wake(task_id: TaskId) {
 /// never scheduled again -- no cleanup of its stack/page directory yet,
 /// acceptable for the small, short-lived test tasks this kernel runs today)
 /// and switches to whatever's next. Never returns.
+///
+/// Relies on `main.rs` always keeping a permanent idle task in the
+/// rotation (one that never itself blocks or exits) so the ready queue is
+/// never empty here -- see the `.expect()` below.
 pub fn exit_current(exit_code: i32) -> ! {
     let (id, new_esp) = {
         let mut sched = SCHEDULER.lock();
@@ -169,7 +178,7 @@ pub fn exit_current(exit_code: i32) -> ! {
         let next_id = sched
             .ready_queue
             .pop_front()
-            .expect("no other tasks to run after exit");
+            .expect("no other tasks to run after exit (missing idle task?)");
         let next_idx = sched.index_of(next_id);
         sched.tasks[next_idx].state = TaskState::Running;
         sched.current = Some(next_id);
@@ -178,6 +187,12 @@ pub fn exit_current(exit_code: i32) -> ! {
         (current_id, sched.tasks[next_idx].esp)
     };
 
+    // Wake (with a failure indication) anything blocked send/recv-ing with
+    // this task, before it's gone for good -- otherwise a partner waiting
+    // on a message from `id` would stay Blocked forever. Must run after the
+    // SCHEDULER guard above has dropped: task_exited calls wake(), which
+    // locks SCHEDULER itself.
+    ipc::task_exited(id);
     crate::println!("[ task {} exited with code {} ]", id, exit_code);
 
     let mut discard: usize = 0;

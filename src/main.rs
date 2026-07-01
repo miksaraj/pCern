@@ -42,8 +42,15 @@ const MULTIBOOT_MAGIC: u32 = 0x2BADB002;
 /// mapping the boot bootstrap sets up, so no real paging is needed yet;
 /// the physical frame allocator/paging brought up later in kernel_main is
 /// only used for task stacks, page tables, etc.
+///
+/// Explicitly 8-byte aligned: mm::heap::LockedHeap::init requires it (see
+/// its MIN_BLOCK_ALIGN doc comment) to guarantee alignment-padding slivers
+/// during allocation are never smaller than a trackable free block. A
+/// plain `[u8; N]` has no inherent alignment beyond 1.
 const HEAP_SIZE: usize = 256 * 1024;
-static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+#[repr(align(8))]
+struct HeapMemory(#[allow(dead_code)] [u8; HEAP_SIZE]);
+static mut HEAP_MEMORY: HeapMemory = HeapMemory([0; HEAP_SIZE]);
 
 #[global_allocator]
 static ALLOCATOR: mm::heap::LockedHeap = mm::heap::LockedHeap::empty();
@@ -73,7 +80,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     println!("[ \x1b[1;32mok\x1b[0m ] kernel heap online ({} KiB)", HEAP_SIZE / 1024);
 
     let mb_info = unsafe { multiboot::MultibootInfo::from_addr(multiboot_info_addr) };
-    let total_memory = mb_info.total_memory_bytes();
+    let total_memory = mb_info
+        .total_memory_bytes()
+        .expect("multiboot did not report memory size (FLAG_MEM unset) -- not booted by a compliant multiboot loader?");
     println!(
         "[ \x1b[1;32mok\x1b[0m ] multiboot reports {} MiB usable memory",
         total_memory / (1024 * 1024)
@@ -114,10 +123,23 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
             ),
         }
     }
+
+    // Spawned last so it doesn't shift ping's hardcoded PONG_TASK_ID. Never
+    // blocks or exits, so block_current()/exit_current() always have at
+    // least one task to fall back to instead of panicking when every "real"
+    // task is blocked/exited.
+    scheduler::spawn_kernel_task(idle_task);
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned idle task");
     println!("[ \x1b[1;32mok\x1b[0m ] handing off to the scheduler");
     println!();
 
     scheduler::start();
+}
+
+extern "C" fn idle_task() -> ! {
+    loop {
+        unsafe { core::arch::asm!("hlt") };
+    }
 }
 
 /// Loads multiboot module `index` (see grub.cfg) as a flat, position-

@@ -17,7 +17,9 @@ const SYS_YIELD: u32 = 1;
 const SYS_SEND: u32 = 2;
 const SYS_RECV: u32 = 3;
 const SYS_GETPID: u32 = 4;
-const SYS_DEBUG_WRITE: u32 = 5;
+// 5 was SYS_DEBUG_WRITE, retired now that the console server (Checkpoint D)
+// owns all real console output; left unassigned rather than renumbering
+// everything after it.
 const SYS_REGISTER_IRQ: u32 = 6;
 const SYS_MAP_MEMORY: u32 = 7;
 const SYS_CREATE_TASK: u32 = 8;
@@ -66,10 +68,6 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             ipc::recv(self_id, filter, regs as *mut SavedRegs);
         }
         SYS_GETPID => regs.eax = self_id as u32,
-        SYS_DEBUG_WRITE => {
-            sys_debug_write(regs.ebx as *const u8, regs.ecx as usize);
-            regs.eax = 0;
-        }
         SYS_REGISTER_IRQ => {
             regs.eax = if scheduler::current_is_driver() && irq::register(regs.ebx, self_id) {
                 0
@@ -129,27 +127,3 @@ fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize) -> u32 {
     0
 }
 
-/// Prints a user-supplied byte slice to the console. Deliberately temporary:
-/// real output belongs in a userspace console server, not the kernel, so
-/// this exists only to bring up/prove ring 3 before that server exists.
-///
-/// The pointer/length are validated against the calling task's own page
-/// tables before being dereferenced: without this, a task could point ptr
-/// at kernel memory (every address space maps the kernel identically) and
-/// have the kernel print out arbitrary kernel heap/stack/GDT/IDT contents,
-/// or point it at an unmapped address and crash the whole kernel via a
-/// kernel-mode page fault.
-fn sys_debug_write(ptr: *const u8, len: usize) {
-    const MAX_LEN: usize = 512;
-    if ptr.is_null() || len == 0 {
-        return;
-    }
-    let len = len.min(MAX_LEN);
-    if !crate::mm::paging::current_range_is_user_accessible(ptr as usize, len) {
-        return;
-    }
-    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    if let Ok(s) = core::str::from_utf8(bytes) {
-        crate::print!("{}", s);
-    }
-}

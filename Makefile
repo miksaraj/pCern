@@ -51,6 +51,7 @@ iso: kernel userland
 	$(CP) $(KERNEL_BIN) $(BOOT_PATH)/pcern.elf
 	$(CP) $(USERLAND_DIR)/ping.bin $(BOOT_PATH)/ping.bin
 	$(CP) $(USERLAND_DIR)/pong.bin $(BOOT_PATH)/pong.bin
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 

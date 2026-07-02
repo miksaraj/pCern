@@ -93,14 +93,25 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     unsafe { core::arch::asm!("sti") };
     println!("[ \x1b[1;32mok\x1b[0m ] interrupts enabled");
 
+    // Spawned first so it always gets task id 1 (id 0 is the reserved
+    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs): driver-flagged, with
+    // port access to the keyboard controller and CRTC, since it owns both
+    // the keyboard and VGA/ANSI console now (Checkpoint D). ping.asm/
+    // pong.asm hardcode this id (CONSOLE_TASK_ID) to reach it.
+    const CONSOLE_SERVER_PORTS: [u16; 4] = [0x60, 0x64, 0x3D4, 0x3D5];
+    match loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS) {
+        Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", id),
+        None => println!("[ \x1b[1;33mwarn\x1b[0m ] no multiboot module 0 found, skipping 'console_server'"),
+    }
+
     scheduler::spawn_kernel_task(task_a);
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    // Spawn order matters: ping.asm hardcodes pong's task id (4), which
-    // depends on task_a/task_b (1, 2) and ping itself (3) being spawned
-    // first in exactly this order -- see userland/ping.asm.
-    for (index, name) in [(0, "ping"), (1, "pong")] {
+    // Spawn order matters: ping.asm hardcodes pong's task id (5), which
+    // depends on console_server (1), task_a/task_b (2, 3), and ping itself
+    // (4) being spawned first in exactly this order -- see userland/ping.asm.
+    for (index, name) in [(1, "ping"), (2, "pong")] {
         match loader::spawn_from_module(index, false, &[]) {
             Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task '{}' (id={})", name, id),
             None => println!(

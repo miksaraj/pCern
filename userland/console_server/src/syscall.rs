@@ -18,10 +18,13 @@ const SYS_YIELD: u32 = 1;
 const SYS_SEND: u32 = 2;
 const SYS_RECV: u32 = 3;
 const SYS_GETPID: u32 = 4;
-const SYS_DEBUG_WRITE: u32 = 5;
 const SYS_REGISTER_IRQ: u32 = 6;
 const SYS_MAP_MEMORY: u32 = 7;
 const SYS_CREATE_TASK: u32 = 8;
+
+/// Reserved sender id `recv` reports for interrupts the kernel forwards
+/// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
+pub const KERNEL_TASK_ID: u32 = 0;
 
 #[repr(C)]
 struct RawResult {
@@ -46,15 +49,18 @@ pub fn exit(code: i32) -> ! {
     unreachable!("sys_exit returned")
 }
 
+#[allow(dead_code)]
 pub fn yield_now() {
     unsafe { syscall_raw(SYS_YIELD, 0, 0, 0, 0, 0) };
 }
 
 /// Returns 0 on success.
+#[allow(dead_code)]
 pub fn send(dest: u32, w0: u32, w1: u32, w2: u32, w3: u32) -> i32 {
     unsafe { syscall_raw(SYS_SEND, dest, w0, w1, w2, w3) }.eax as i32
 }
 
+#[allow(dead_code)]
 pub struct RecvResult {
     pub sender: u32,
     pub w0: u32,
@@ -77,15 +83,9 @@ pub fn recv(filter: u32) -> RecvResult {
     }
 }
 
+#[allow(dead_code)]
 pub fn getpid() -> u32 {
     unsafe { syscall_raw(SYS_GETPID, 0, 0, 0, 0, 0) }.eax
-}
-
-/// Deliberately temporary -- see the kernel's own sys_debug_write doc
-/// comment. Used here only until Checkpoint D's real console protocol
-/// replaces it.
-pub fn debug_write(bytes: &[u8]) {
-    unsafe { syscall_raw(SYS_DEBUG_WRITE, bytes.as_ptr() as u32, bytes.len() as u32, 0, 0, 0) };
 }
 
 /// Returns 0 on success, nonzero if the caller isn't driver-flagged or

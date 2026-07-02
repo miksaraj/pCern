@@ -174,6 +174,23 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
+    // Checkpoint N: the interactive shell -- purely an IPC client of
+    // console_server/fs_fat32/name-service, no hardware ports or
+    // capabilities of its own beyond the usual CSlot 1/2 convention.
+    // Excluded from the test_harness/keyboard_test builds: it would be
+    // one more concurrent console-input reader racing console_input_test
+    // for the "single reader at a time" role in the keyboard_test build,
+    // and would shift every fixture's task id (used throughout
+    // run_tests.sh/console_input_test's own script) in the test_harness
+    // build for no benefit, since nothing there exercises it anyway.
+    #[cfg(not(any(feature = "test_harness", feature = "keyboard_test")))]
+    {
+        let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
+        println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'shell' (id={})", shell_id);
+        let shell_endpoint = ipc::create_endpoint(shell_id);
+        grant_endpoint_cap(shell_id, shell_endpoint); // shell's CSlot 2: its own inbox
+    }
+
     #[cfg(feature = "test_harness")]
     test_harness_spawn();
 

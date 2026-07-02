@@ -34,6 +34,11 @@ FS_FAT32_TARGET := i686-pcern-user
 FS_FAT32_ELF := $(FS_FAT32_DIR)/target/$(FS_FAT32_TARGET)/$(PROFILE)/fs_fat32
 FS_FAT32_BIN := $(USERLAND_DIR)/fs_fat32.bin
 
+SHELL_DIR := $(USERLAND_DIR)/shell
+SHELL_TARGET := i686-pcern-user
+SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
+SHELL_BIN := $(USERLAND_DIR)/shell.bin
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -85,7 +90,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
+userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
 
 $(CONSOLE_SERVER_BIN): FORCE
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)
@@ -102,6 +107,10 @@ $(STORAGE_ATA_BIN): FORCE
 $(FS_FAT32_BIN): FORCE
 	cd $(FS_FAT32_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(FS_FAT32_ELF) $(FS_FAT32_BIN)
+
+$(SHELL_BIN): FORCE
+	cd $(SHELL_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(SHELL_ELF) $(SHELL_BIN)
 
 .PHONY: FORCE
 FORCE:
@@ -134,6 +143,7 @@ iso: kernel userland
 	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
 	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
 	$(CP) $(FS_FAT32_BIN) $(BOOT_PATH)/fs_fat32.bin
+	$(CP) $(SHELL_BIN) $(BOOT_PATH)/shell.bin
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -204,5 +214,6 @@ clean:
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
+	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
 	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

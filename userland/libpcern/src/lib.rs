@@ -159,6 +159,52 @@ pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
     recv(my_inbox_slot).w0
 }
 
+/// Console *input* wire protocol (see userland/console_server). A reader
+/// connects once (`console_connect`) -- handing over a shared page via
+/// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
+/// line's bytes into, and its own dedicated line-ready endpoint (never
+/// shared with any other role -- see CLAUDE.md's "one inbox is not
+/// automatically safe for two roles") as the reply-to address -- then
+/// issues one `CONSOLE_OP_READ_LINE` request per line it wants to read.
+/// Only one reader is supported at a time, the same scope-narrowing
+/// precedent as storage_ata's single client -- but worth calling out
+/// specifically here: unlike storage_ata's client (fs_fat32, always
+/// already blocked in its own `recv` by the time a reply is due),
+/// console_server is a system-wide, always-running service. `send`
+/// blocks the *sender* until a matching `recv` arrives (see ipc.rs's
+/// rendezvous design), so a reader that requests a line and then never
+/// calls `recv` would block console_server's entire main loop --
+/// starving every other task's `OP_PUTCHAR` and all further keystroke
+/// echo, too -- until it does. Acceptable for this phase's single
+/// trusted shell client; would need revisiting (e.g. a bounded queue or
+/// timeout) if an untrusted reader is ever introduced.
+pub const CONSOLE_OP_SET_BUFFER: u32 = 1;
+pub const CONSOLE_OP_SET_READER: u32 = 2;
+pub const CONSOLE_OP_READ_LINE: u32 = 3;
+
+/// Bytes typed before Enter beyond this are dropped (not buffered, and
+/// not an error) -- bounded well under the shared page's 4096-byte
+/// capacity for headroom; see console_server's own accumulator.
+pub const CONSOLE_LINE_MAX: usize = 256;
+
+/// Establishes a connection to console_server's line-input protocol, same
+/// shape as `storage_connect`/`fs_connect`.
+#[allow(dead_code)]
+pub fn console_connect(console_slot: u32, buf_grant_slot: u32, reader_slot: u32) {
+    send(console_slot, CONSOLE_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(console_slot, CONSOLE_OP_SET_READER, 0, 0, reader_slot);
+}
+
+/// Requests the next typed line and blocks until Enter is pressed.
+/// Returns the number of bytes placed in the shared buffer established by
+/// `console_connect` (not including the trailing newline) -- may be `0`
+/// for an empty line.
+#[allow(dead_code)]
+pub fn console_read_line(console_slot: u32, reader_slot: u32) -> u32 {
+    send(console_slot, CONSOLE_OP_READ_LINE, 0, 0, 0);
+    recv(reader_slot).w0
+}
+
 /// Packs up to 8 bytes of `name` into two little-endian u32 words,
 /// zero-padded if shorter (longer names are truncated to 8 bytes). Used
 /// by both sides of the name-service protocol so the encoding only lives

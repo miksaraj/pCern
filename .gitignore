@@ -4,6 +4,7 @@
 # Make results
 iso
 iso-test
+iso-keytest
 *.iso
 *.o
 *.elf

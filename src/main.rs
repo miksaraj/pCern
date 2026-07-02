@@ -139,9 +139,19 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let irq_slot = scheduler::install_cap_for(console_id, irq_control);
     debug_assert_eq!(irq_slot, 4, "console_server's IrqControl must land at CSlot 4");
 
-    scheduler::spawn_kernel_task(task_a);
-    scheduler::spawn_kernel_task(task_b);
-    println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
+    // Skipped for the keyboard_test build specifically: these two tasks'
+    // println! calls mirror to serial with no lock shared with
+    // console_input_test's own raw COM1 writes (see that fixture's doc
+    // comment) -- byte-interleaving risk neither the production nor the
+    // regular test_harness build ever has to care about, since nothing
+    // else there writes to serial from outside the kernel's own
+    // println!/serial module.
+    #[cfg(not(feature = "keyboard_test"))]
+    {
+        scheduler::spawn_kernel_task(task_a);
+        scheduler::spawn_kernel_task(task_b);
+        println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
+    }
 
     // Checkpoint I: the ATA/IDE storage driver. Port access is still
     // hand-wired here the same way console_server's is (there's no
@@ -166,6 +176,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "test_harness")]
     test_harness_spawn();
+
+    #[cfg(feature = "keyboard_test")]
+    keyboard_test_spawn();
 
     // Spawned last. Never blocks or exits, so block_current()/exit_current()
     // always have at least one task to fall back to instead of panicking
@@ -241,12 +254,40 @@ fn test_harness_spawn() {
     );
 }
 
+/// Spawns `console_input_test` (see `userland/cap_test`) as a ring-3
+/// task, only present in a kernel built with `--features keyboard_test`
+/// (see `make iso-keytest`) -- `grub-keytest.cfg` is the one grub config
+/// whose module list matches the index below; this is deliberately its
+/// own standalone build/boot rather than one more fixture folded into
+/// `test_harness_spawn`, since this is the one fixture that blocks on
+/// real external keystrokes (see run_console_input_test.sh) rather than
+/// completing on its own -- folded into the shared `iso-test` boot, it
+/// would simply hang every `make test` run until that harness's own
+/// timeout. Granted direct COM1 port access (0x3F8 data, 0x3FD line
+/// status), the same allowed_ports mechanism storage_ata's ATA ports use,
+/// so it can print its own readiness marker straight to serial -- see its
+/// own doc comment for why.
+#[cfg(feature = "keyboard_test")]
+fn keyboard_test_spawn() {
+    const COM1_PORTS: [u16; 2] = [0x3F8, 0x3FD];
+    let console_input_test_id =
+        loader::spawn_from_module(4, &COM1_PORTS).expect("no multiboot module 4 found for 'console_input_test'");
+    let console_input_test_endpoint = ipc::create_endpoint(console_input_test_id);
+    grant_endpoint_cap(console_input_test_id, console_input_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] keyboard_test: spawned console_input_test (id={})",
+        console_input_test_id
+    );
+}
+
 extern "C" fn idle_task() -> ! {
     loop {
         unsafe { core::arch::asm!("hlt") };
     }
 }
 
+#[cfg_attr(feature = "keyboard_test", allow(dead_code))]
 extern "C" fn task_a() -> ! {
     let mut i: u32 = 0;
     loop {
@@ -256,6 +297,7 @@ extern "C" fn task_a() -> ! {
     }
 }
 
+#[cfg_attr(feature = "keyboard_test", allow(dead_code))]
 extern "C" fn task_b() -> ! {
     let mut i: u32 = 0;
     loop {

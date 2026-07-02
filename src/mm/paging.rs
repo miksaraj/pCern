@@ -95,6 +95,15 @@ impl PageDirectory {
         PageDirectory { phys_frame }
     }
 
+    /// Reconstructs a handle to an already-built page directory from its
+    /// physical address. Needed so a syscall running *inside* an
+    /// already-started task (e.g. map_memory) can map more pages into that
+    /// same still-active address space -- the task only stores the plain
+    /// `page_dir_phys: usize` (see task.rs), not a live `PageDirectory`.
+    pub fn from_phys(phys_frame: usize) -> Self {
+        PageDirectory { phys_frame }
+    }
+
     /// Maps a single 4 KiB page, allocating a page-table frame on demand if
     /// the covering PDE isn't present yet.
     pub fn map_page(&mut self, virt_addr: usize, phys_addr: usize, user: bool, writable: bool) {

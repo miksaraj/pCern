@@ -28,6 +28,7 @@ impl Scheduler {
     /// even though the actual stack switch hasn't happened yet.
     fn activate(&self, idx: usize) {
         gdt::set_kernel_stack(self.tasks[idx].kernel_stack_top() as u32);
+        gdt::set_io_permissions(&self.tasks[idx].allowed_ports);
         unsafe { paging::activate_phys(self.tasks[idx].page_dir_phys) };
     }
 }
@@ -56,6 +57,26 @@ pub fn spawn(task: Task) -> TaskId {
 
 pub fn current_id() -> Option<TaskId> {
     SCHEDULER.lock().current
+}
+
+/// Whether the currently running task is kernel-flagged as a driver (see
+/// task.rs) -- gates the privileged syscalls (map_memory,
+/// register_for_interrupt) in syscall.rs.
+pub fn current_is_driver() -> bool {
+    let sched = SCHEDULER.lock();
+    match sched.current {
+        Some(id) => sched.tasks[sched.index_of(id)].is_driver,
+        None => false,
+    }
+}
+
+/// Physical address of the currently running task's own page directory --
+/// needed so a syscall (e.g. map_memory) can map more pages into that same
+/// still-active address space via `mm::paging::PageDirectory::from_phys`.
+pub fn current_page_dir_phys() -> usize {
+    let sched = SCHEDULER.lock();
+    let id = sched.current.expect("syscall with no current task");
+    sched.tasks[sched.index_of(id)].page_dir_phys
 }
 
 /// Hands control to the scheduler: picks the first ready task and switches

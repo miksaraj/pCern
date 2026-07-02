@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-02
+
+### Added
+
+- A shared-memory buffered line-input protocol (`CONSOLE_OP_SET_BUFFER`/
+  `SET_READER`/`READ_LINE`), mirroring `storage_ata`'s connect shape: a
+  reader hands over a `mem_alloc`'d page and its own dedicated endpoint,
+  then requests one typed line at a time. Every keystroke is still
+  echoed to the screen unconditionally; once armed, bytes are also
+  accumulated into the reader's page until Enter, with backspace tracked
+  against that accumulator's own length and excess bytes past
+  `CONSOLE_LINE_MAX` dropped rather than overflowed. Only one reader is
+  supported at a time -- see the crate's doc comment for why a
+  misbehaving reader could, in principle, block the whole console (a
+  known limitation, not yet needed against an untrusted client).
+
 ## [0.1.0] - 2026-07-02
 
 Initial release.

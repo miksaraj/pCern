@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-02
+
+### Added
+
+- `spawn_from_memory`: client wrapper for the new `SYS_SPAWN_FROM_MEMORY`
+  syscall (13) -- loads and runs a program from up to 4 `MemoryGrant`
+  capability slots, the load-from-memory counterpart to `create_task`.
+- Console-input client helpers: `console_connect`, `console_read_line`,
+  and the `CONSOLE_OP_*`/`CONSOLE_LINE_MAX` constants for
+  `console_server`'s new line-input protocol.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release. Extracted from `console_server`'s own syscall bindings

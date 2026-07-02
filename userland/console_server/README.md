@@ -46,6 +46,42 @@ Keyboard input arrives via the interrupt the kernel forwards for IRQ 1
 (`keyboard.rs`) the same way they used to be decoded in the kernel before
 Checkpoint D moved this whole responsibility out of ring 0.
 
+## Line-input protocol (Checkpoint L)
+
+Every keystroke is echoed to the screen unconditionally, the same as
+always. A client that also wants to *read* typed input connects once:
+
+```
+grant_slot = mem_alloc(...)                 // a page for completed lines
+reader_slot = endpoint_create()             // never the client's own inbox --
+                                             // see CLAUDE.md's note on why
+send(console_slot, CONSOLE_OP_SET_BUFFER, 0, 0, transfer = grant_slot)
+send(console_slot, CONSOLE_OP_SET_READER, 0, 0, transfer = reader_slot)
+```
+
+then requests one line at a time:
+
+```
+send(console_slot, CONSOLE_OP_READ_LINE, 0, 0, 0)
+len = recv(reader_slot).w0   // blocks until Enter; bytes are at grant_slot's
+                             // virtual address, not including the newline
+```
+
+Only one reader is supported at a time -- the same scope-narrowing
+precedent as `storage_ata`'s single client, though worth calling out
+specifically here: `send` blocks the *sender* until a matching `recv`
+arrives, so a reader that arms a read and then never calls `recv` would
+block this task's entire main loop (no other client's `OP_PUTCHAR`, no
+further keystroke echo) until it does. Fine for this phase's one trusted
+shell client; would need revisiting (a queue or timeout) against an
+untrusted reader.
+
+Backspace is tracked against the accumulator's own length (bounded at
+`0`), independent of `vga.rs`'s unrelated screen-cursor backspace
+handling. Bytes typed once the accumulator reaches `CONSOLE_LINE_MAX`
+(256) are dropped, not buffered -- not an error, just not accumulated;
+they're still echoed to the screen.
+
 ## Why this is a userspace task at all
 
 Before Checkpoint D, the kernel itself decoded scancodes and wrote

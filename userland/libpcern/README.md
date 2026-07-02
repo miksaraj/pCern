@@ -14,9 +14,9 @@ of its own.
 
 - **Syscall wrappers** (`send`, `recv`, `exit`, `yield_now`, `getpid`,
   `register_irq`, `map_memory`, `mem_alloc`, `create_task`,
-  `endpoint_create`, `cap_mint_badged`, `cap_revoke`) -- one function per
-  syscall, matching the numbers/argument registers in the kernel's
-  `src/syscall.rs`.
+  `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
+  `spawn_from_memory`) -- one function per syscall, matching the
+  numbers/argument registers in the kernel's `src/syscall.rs`.
 - **Name-service helpers** (`lookup_name`, `lookup_name_retry`,
   `register_name`, `pack_name`) -- see `userland/nameservice/README.md`
   for the wire protocol these implement.
@@ -24,6 +24,8 @@ of its own.
   see `userland/storage_ata/README.md`.
 - **Filesystem-service helpers** (`fs_connect`, `fs_open`, `fs_read`,
   `fat_pack_name`) -- see `userland/fs_fat32/README.md`.
+- **Console-input helpers** (`console_connect`, `console_read_line`) --
+  see `userland/console_server/README.md`'s line-input protocol section.
 
 ## The `int 0x80` trampoline lives in hand-written assembly
 

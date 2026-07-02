@@ -20,3 +20,7 @@ userland/fs_fat32/target
 
 # Assembled userland test binaries
 userland/*.bin
+
+# Checkpoint K: generated on demand via `make test-fat32-image` from
+# testdata/ -- not committed (see Makefile).
+/test_fat32.img

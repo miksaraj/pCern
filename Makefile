@@ -44,6 +44,17 @@ BOOT_PATH := $(ISO_PATH)/boot
 GRUB_PATH := $(BOOT_PATH)/grub
 ISO := pcern-i386.iso
 
+# Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
+# (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
+# via `make test-fat32-image` from the small tracked source files in
+# testdata/ rather than committing the image itself -- attach it the same
+# way Checkpoint I's spike disk was attached:
+# `qemu-system-i386 ... -boot d -drive file=$(TEST_FAT32_IMG),if=ide,index=0,format=raw`.
+MTOOLS_MFORMAT := mformat
+MTOOLS_MCOPY := mcopy
+TESTDATA_DIR := testdata
+TEST_FAT32_IMG := test_fat32.img
+
 .PHONY: all
 all: iso
 	@echo Make has completed.
@@ -107,6 +118,14 @@ iso: kernel userland
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
+.PHONY: test-fat32-image
+test-fat32-image:
+	$(RM) $(TEST_FAT32_IMG)
+	dd if=/dev/zero of=$(TEST_FAT32_IMG) bs=1M count=64 status=none
+	$(MTOOLS_MFORMAT) -i $(TEST_FAT32_IMG) -F -v PCERNFS ::
+	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/HELLO.TXT ::HELLO.TXT
+	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/BIG.TXT ::BIG.TXT
+
 .PHONY: run
 run: iso
 	qemu-system-i386 -cdrom $(ISO) -serial stdio
@@ -119,4 +138,4 @@ clean:
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin
+	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

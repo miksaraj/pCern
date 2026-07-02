@@ -6,6 +6,11 @@
 //! screendumped and compared against the host-side source text. Not part
 //! of the default build; wired into main.rs only temporarily for this
 //! checkpoint's verification.
+//!
+//! Checkpoint M also exercises the new `SYS_SPAWN_FROM_MEMORY` syscall
+//! from here (load and run LOADED.BIN, see loaded_program.rs) rather than
+//! from a separate fixture -- fs_fat32 only supports one client at a
+//! time, so a second concurrent connection would clobber this one's.
 
 #![no_std]
 #![no_main]
@@ -131,6 +136,49 @@ pub extern "C" fn _start() -> ! {
         print(console_slot, b"fs_client_test: FAIL (BIG.TXT mismatch)\n");
         libpcern::exit(1);
     }
+
+    // Checkpoint M: exercise SYS_SPAWN_FROM_MEMORY by loading and running
+    // LOADED.BIN (see loaded_program.rs) through this exact connection --
+    // a second fixture connecting to fs_fat32 concurrently would clobber
+    // this one's (fs_fat32 only supports one client at a time, see its
+    // own doc comment), so this reuses grant_slot/BUF_VIRT rather than
+    // adding one. `send`'s capability transfer mints a derived child
+    // rather than moving the original (see cap.rs/syscall.rs), so
+    // grant_slot is still a valid MemoryGrant here even after fs_connect
+    // already handed a copy to fs_fat32. Confirms the loaded program
+    // actually *executed*, not just that the syscall returned a nonzero
+    // task id, via its own distinctive exit code (see loaded_program.rs's
+    // doc comment) -- checked from the kernel's own serial log by
+    // run_tests.sh, since this fixture has no way to observe another
+    // task's exit code directly.
+    let loaded_size = match libpcern::fs_open(fs_slot, MY_INBOX, b"LOADED.BIN") {
+        Some(s) => s,
+        None => {
+            print(console_slot, b"fs_client_test: FAIL (open LOADED.BIN)\n");
+            libpcern::exit(1);
+        }
+    };
+
+    if loaded_size == 0 || loaded_size > 512 {
+        print(console_slot, b"fs_client_test: FAIL (LOADED.BIN unexpected size)\n");
+        libpcern::exit(1);
+    }
+
+    let n = libpcern::fs_read(fs_slot, MY_INBOX, 0, loaded_size);
+    if n != loaded_size {
+        print(console_slot, b"fs_client_test: FAIL (LOADED.BIN short read)\n");
+        libpcern::exit(1);
+    }
+
+    let loaded_task_id = libpcern::spawn_from_memory(&[grant_slot], loaded_size);
+    if loaded_task_id == 0 {
+        print(console_slot, b"fs_client_test: FAIL (spawn_from_memory)\n");
+        libpcern::exit(1);
+    }
+
+    print(console_slot, b"fs_client_test: spawn_from_memory spawned task ");
+    print_u32(console_slot, loaded_task_id);
+    print(console_slot, b"\n");
 
     print(console_slot, b"fs_client_test: PASS\n");
     libpcern::exit(0);

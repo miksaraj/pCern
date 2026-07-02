@@ -70,21 +70,66 @@ pub fn spawn_from_module(index: usize, allowed_ports: &[u16]) -> Option<TaskId> 
         mb_info.as_ref().expect("loader::init not called yet").module(index)?
     };
 
+    let module_len = module.end - module.start;
+    Some(spawn_with_code_pages(
+        module_len,
+        |i| module.start + i * mm::frame::FRAME_SIZE,
+        allowed_ports,
+    ))
+}
+
+/// Checkpoint M: loads and runs a program from up to 4 already-resolved
+/// `MemoryGrant` physical pages (see the `SYS_SPAWN_FROM_MEMORY` syscall,
+/// which does the capability resolution before calling this -- this
+/// function only ever sees physical addresses it's already been told are
+/// safe to read) totaling `total_len` bytes, the same way
+/// `spawn_from_module` loads a fixed multiboot module -- see
+/// `spawn_with_code_pages` for what's shared between the two. Always
+/// spawned with no port access and no capabilities beyond the universal
+/// name-service auto-grant: the same privilege ceiling `spawn_from_module`
+/// already enforces for the `create_task` syscall's untrusted callers,
+/// since there's no path here for a task to hand a spawned program more
+/// privilege than it could get through that existing syscall.
+///
+/// Returns `None` (rather than spawning anything) if `grants` is empty or
+/// `total_len` is zero or doesn't fit in the pages actually supplied --
+/// each `MemoryGrant` is capped at exactly one page (see cap.rs), so this
+/// is just `total_len <= grants.len() * FRAME_SIZE`.
+///
+/// A spawned task's frames and page directory are never reclaimed on
+/// exit here, exactly like every other task today (`scheduler::
+/// exit_current` just marks it `Zombie`) -- a known, deliberate gap for
+/// this phase's "run a few small programs from a shell" scope, not
+/// something this syscall introduces on its own.
+pub fn spawn_from_memory(grants: &[usize], total_len: usize) -> Option<TaskId> {
+    if grants.is_empty() || total_len == 0 || total_len > grants.len() * mm::frame::FRAME_SIZE {
+        return None;
+    }
+    Some(spawn_with_code_pages(total_len, |i| grants[i], &[]))
+}
+
+/// Shared by `spawn_from_module` and `spawn_from_memory`: builds a fresh
+/// address space, maps `total_len` bytes of code at `USER_CODE_BASE`
+/// (page `i`'s source bytes come from `page_phys(i)`, since the two
+/// callers' sources -- a multiboot module's contiguous physical range vs.
+/// several independently allocated `MemoryGrant` pages -- aren't laid out
+/// the same way), a stack, and spawns the task, installing the
+/// auto-granted name-service capability the same way for both.
+fn spawn_with_code_pages(total_len: usize, page_phys: impl Fn(usize) -> usize, allowed_ports: &[u16]) -> TaskId {
     let mut page_dir = mm::paging::PageDirectory::new();
 
-    let module_len = module.end - module.start;
-    let code_pages = module_len.div_ceil(mm::frame::FRAME_SIZE).max(1);
+    let code_pages = total_len.div_ceil(mm::frame::FRAME_SIZE).max(1);
     for i in 0..code_pages {
         let phys = mm::frame::alloc_frame().expect("out of memory mapping user code");
         page_dir.map_page(USER_CODE_BASE + i * mm::frame::FRAME_SIZE, phys, true, true);
 
         let dst = mm::paging::phys_to_virt(phys) as *mut u8;
         let page_offset = i * mm::frame::FRAME_SIZE;
-        let copy_len = module_len.saturating_sub(page_offset).min(mm::frame::FRAME_SIZE);
+        let copy_len = total_len.saturating_sub(page_offset).min(mm::frame::FRAME_SIZE);
         unsafe {
             core::ptr::write_bytes(dst, 0, mm::frame::FRAME_SIZE);
             if copy_len > 0 {
-                let src = mm::paging::phys_to_virt(module.start + page_offset) as *const u8;
+                let src = mm::paging::phys_to_virt(page_phys(i)) as *const u8;
                 core::ptr::copy_nonoverlapping(src, dst, copy_len);
             }
         }
@@ -108,5 +153,5 @@ pub fn spawn_from_module(index: usize, allowed_ports: &[u16]) -> Option<TaskId> 
         debug_assert_eq!(slot, 1, "name service capability must land at CSlot 1");
     }
 
-    Some(task_id)
+    task_id
 }

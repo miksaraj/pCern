@@ -34,6 +34,7 @@ pub const SYS_ENDPOINT_CREATE: u32 = 9;
 pub const SYS_CAP_MINT_BADGED: u32 = 10;
 pub const SYS_CAP_REVOKE: u32 = 11;
 pub const SYS_MEM_ALLOC: u32 = 12;
+pub const SYS_SPAWN_FROM_MEMORY: u32 = 13;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -367,6 +368,24 @@ pub fn mem_alloc(virt_addr: u32) -> u32 {
 #[allow(dead_code)]
 pub fn create_task(module_index: u32) -> u32 {
     unsafe { syscall_raw(SYS_CREATE_TASK, module_index, 0, 0, 0, 0) }.eax
+}
+
+/// Checkpoint M: loads and runs a program from up to 4 `MemoryGrant`
+/// capability slots (see `SYS_MEM_ALLOC`) the caller has already filled
+/// with code bytes (typically read from a file via `fs_read`), totaling
+/// `total_len` bytes -- the load-from-memory counterpart to
+/// `create_task`'s load-from-module-index. `grant_slots` must have
+/// between 1 and 4 entries; the new task gets no privilege beyond the
+/// universal name-service auto-grant, the same ceiling `create_task`
+/// already enforces. Returns the new task's id, or `0` on failure (an
+/// invalid grant slot, or `total_len` not fitting in the pages supplied --
+/// each `MemoryGrant` is capped at one page, see cap.rs in the kernel).
+#[allow(dead_code)]
+pub fn spawn_from_memory(grant_slots: &[u32], total_len: u32) -> u32 {
+    let mut slots = [0u32; 4];
+    let n = grant_slots.len().min(4);
+    slots[..n].copy_from_slice(&grant_slots[..n]);
+    unsafe { syscall_raw(SYS_SPAWN_FROM_MEMORY, slots[0], slots[1], slots[2], slots[3], total_len) }.eax
 }
 
 /// Mints a new endpoint owned by the caller and installs a capability to

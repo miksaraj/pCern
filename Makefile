@@ -123,6 +123,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/fs_client_test $(USERLAND_DIR)/fs_client_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/console_input_test $(USERLAND_DIR)/console_input_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -183,12 +185,13 @@ test: iso-test test-fat32-image
 	$(MAKE) test-keyboard
 
 .PHONY: test-fat32-image
-test-fat32-image:
+test-fat32-image: cap_test
 	$(RM) $(TEST_FAT32_IMG)
 	dd if=/dev/zero of=$(TEST_FAT32_IMG) bs=1M count=64 status=none
 	$(MTOOLS_MFORMAT) -i $(TEST_FAT32_IMG) -F -v PCERNFS ::
 	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/HELLO.TXT ::HELLO.TXT
 	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/BIG.TXT ::BIG.TXT
+	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(USERLAND_DIR)/loaded_program.bin ::LOADED.BIN
 
 .PHONY: run
 run: iso

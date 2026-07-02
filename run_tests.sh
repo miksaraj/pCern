@@ -5,12 +5,22 @@
 # Task ids are fixed by main.rs's spawn order (nameservice=1,
 # console_server=2, the two background kernel tasks=3-4, storage_ata=5,
 # fs_fat32=6), then test_harness_spawn's fixtures: cap_test_a=7,
-# cap_test_b=8, mem_test_a=9, mem_test_b=10, fs_client_test=11.
+# cap_test_b=8, mem_test_a=9, mem_test_b=10, fs_client_test=11 (then
+# idle_task=12, spawned right after test_harness_spawn returns).
 # storage_client_test isn't spawned here -- see main.rs's
 # test_harness_spawn for why it can't coexist with fs_fat32. Exit codes
 # are the authoritative pass/fail signal (see the project's established
 # convention) -- console text is not, since multiple fixtures printing
 # concurrently interleave byte-for-byte.
+#
+# fs_client_test additionally exercises the new SYS_SPAWN_FROM_MEMORY
+# syscall (Checkpoint M) after its own fs_fat32 checks -- loading and
+# running LOADED.BIN rather than a second fixture connecting to fs_fat32
+# concurrently (which only supports one client at a time). Since task ids
+# are a monotonic counter never reused, and every static spawn above
+# happens before the scheduler ever runs anything, that dynamically
+# spawned program deterministically lands at task id 13 (one past
+# idle_task's 12).
 
 set -uo pipefail
 
@@ -48,6 +58,13 @@ check_exit 8  "cap_test_b  -- capability revocation"
 check_exit 9  "mem_test_a  -- shared memory grant (writer)"
 check_exit 10 "mem_test_b  -- shared memory grant (reader)"
 check_exit 11 "fs_client_test -- fs_fat32 protocol (exercises storage_ata too)"
+
+if grep -q "task 13 exited with code 42" "$SERIAL_LOG"; then
+    echo "PASS: LOADED.BIN -- dynamically spawned program actually executed (task 13 exited 42)"
+else
+    echo "FAIL: LOADED.BIN -- dynamically spawned program did not exit with its distinctive code"
+    FAILED=1
+fi
 
 UNEXPECTED=$(grep -o 'v=[0-9a-f]*' "$INT_LOG" | sort -u | grep -v -e '^v=20$' -e '^v=80$' || true)
 if [ -n "$UNEXPECTED" ]; then

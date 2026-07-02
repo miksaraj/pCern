@@ -243,6 +243,14 @@ fn test_harness_spawn() {
     // thoroughly at one remove; storage_client_test is still there for
     // standalone verification (temporarily wired in with fs_fat32 absent,
     // the way Checkpoint I originally used it).
+    // Checkpoint M: fs_client_test also exercises the new
+    // SYS_SPAWN_FROM_MEMORY syscall (loads and runs LOADED.BIN) after its
+    // own fs_fat32 checks, rather than a second fixture connecting to
+    // fs_fat32 concurrently -- fs_fat32 only supports one client at a
+    // time (same single-client scope as storage_ata), the same reason
+    // storage_client_test can't run alongside it either. See
+    // fs_client_test.rs and run_tests.sh's check for the exact task id
+    // this produces.
     let fs_client_test_id =
         loader::spawn_from_module(8, &[]).expect("no multiboot module 8 found for 'fs_client_test'");
     let fs_client_test_endpoint = ipc::create_endpoint(fs_client_test_id);

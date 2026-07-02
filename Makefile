@@ -4,8 +4,14 @@ TARGET := i686-pcern
 KERNEL_BIN := target/$(TARGET)/$(PROFILE)/pcern
 
 NASM := nasm
+OBJCOPY := objcopy
 USERLAND_DIR := userland
 USERLAND_BINS := $(USERLAND_DIR)/ping.bin $(USERLAND_DIR)/pong.bin
+
+CONSOLE_SERVER_DIR := $(USERLAND_DIR)/console_server
+CONSOLE_SERVER_TARGET := i686-pcern-user
+CONSOLE_SERVER_ELF := $(CONSOLE_SERVER_DIR)/target/$(CONSOLE_SERVER_TARGET)/$(PROFILE)/console_server
+CONSOLE_SERVER_BIN := $(USERLAND_DIR)/console_server.bin
 
 CP := cp
 RM := rm -rf
@@ -27,10 +33,17 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(USERLAND_BINS)
+userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN)
 
 $(USERLAND_DIR)/%.bin: $(USERLAND_DIR)/%.asm
 	$(NASM) -f bin $< -o $@
+
+$(CONSOLE_SERVER_BIN): FORCE
+	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(CONSOLE_SERVER_ELF) $(CONSOLE_SERVER_BIN)
+
+.PHONY: FORCE
+FORCE:
 
 .PHONY: iso
 iso: kernel userland
@@ -48,4 +61,5 @@ run: iso
 .PHONY: clean
 clean:
 	$(CARGO) clean
+	cd $(CONSOLE_SERVER_DIR) && $(CARGO) clean
 	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin

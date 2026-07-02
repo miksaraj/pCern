@@ -1,0 +1,49 @@
+# libpcern
+
+Shared `no_std` bindings for pCern userspace programs: the `int 0x80`
+syscall trampoline, wrappers for every syscall, and the client-side
+helpers for each service's IPC protocol (name-service register/lookup,
+storage block reads, filesystem open/read). Every other crate under
+`userland/` depends on this one so the syscall ABI and wire-format details
+live in exactly one place instead of being copy-pasted into each program.
+
+This is a library crate (`src/lib.rs`), not a binary -- it has no `_start`
+of its own.
+
+## What's in here
+
+- **Syscall wrappers** (`send`, `recv`, `exit`, `yield_now`, `getpid`,
+  `register_irq`, `map_memory`, `mem_alloc`, `create_task`,
+  `endpoint_create`, `cap_mint_badged`, `cap_revoke`) -- one function per
+  syscall, matching the numbers/argument registers in the kernel's
+  `src/syscall.rs`.
+- **Name-service helpers** (`lookup_name`, `lookup_name_retry`,
+  `register_name`, `pack_name`) -- see `userland/nameservice/README.md`
+  for the wire protocol these implement.
+- **Storage-service helpers** (`storage_connect`, `storage_read_block`) --
+  see `userland/storage_ata/README.md`.
+- **Filesystem-service helpers** (`fs_connect`, `fs_open`, `fs_read`,
+  `fat_pack_name`) -- see `userland/fs_fat32/README.md`.
+
+## The `int 0x80` trampoline lives in hand-written assembly
+
+`syscall_asm.s` (assembled via `global_asm!`), not a Rust `asm!` block --
+LLVM reserves `esi` as a base pointer inside ordinary (non-`naked`)
+function bodies, which conflicts with this ABI's use of `esi` as a
+register-pinned argument/return value. The trampoline captures every
+register the kernel's syscall ABI might write on return (`eax`-`edi`)
+unconditionally into a `RawResult` struct, regardless of which ones a
+given syscall actually uses.
+
+If you add a new syscall or change what a register carries, update
+`syscall_asm.s`'s callers alongside the wrapper function -- there's no
+compiler-enforced link between the two.
+
+## Wire-format convention: a 3-word budget
+
+`send`/`recv` carry a destination/endpoint capability slot, three message
+words (`w0`/`w1`/`w2`), and one optional capability transfer. Every helper
+in this crate designs its protocol around that fixed budget -- see
+[CLAUDE.md](../../CLAUDE.md) for why, and for the pattern used when a
+logical operation doesn't fit in one message (split it across two, as
+`fs_open`'s `FS_OP_OPEN_NAME1`/`NAME2` does).

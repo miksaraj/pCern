@@ -3,7 +3,6 @@ PROFILE := release
 TARGET := i686-pcern
 KERNEL_BIN := target/$(TARGET)/$(PROFILE)/pcern
 
-NASM := nasm
 OBJCOPY := objcopy
 USERLAND_DIR := userland
 
@@ -76,12 +75,6 @@ kernel:
 
 .PHONY: userland
 userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
-
-# Kept for the older standalone .asm test fixtures (driver_test.asm,
-# irq_test.asm, etc.), built on demand by hand -- not part of any
-# .PHONY target.
-$(USERLAND_DIR)/%.bin: $(USERLAND_DIR)/%.asm
-	$(NASM) -f bin $< -o $@
 
 $(CONSOLE_SERVER_BIN): FORCE
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)

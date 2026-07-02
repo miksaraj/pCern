@@ -8,4 +8,3 @@ target = "i686-pcern.json"
 
 [target.i686-pcern]
 rustflags = ["-C", "link-arg=-Tlinker.ld"]
-runner = "scripts/run-qemu.sh"

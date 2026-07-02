@@ -7,14 +7,16 @@
 //! kernel-mediated debug_write.
 //!
 //! Checkpoint E: addressing moved from raw task ids to capability slots
-//! (see cap.rs's CSpace in the kernel). There's no name service yet (that's
-//! Checkpoint H), so main.rs wires every task's capabilities by hand right
-//! after spawning, following one fixed convention every userland program
-//! shares: CSlot 1 is always "my own inbox" endpoint, used for `recv`.
+//! (see cap.rs's CSpace in the kernel).
 //!
 //! Checkpoint G: VGA/keyboard access are capability-mediated now instead
 //! of the old is_driver bool + hardcoded MMIO allowlist -- main.rs grants
-//! this task a MemoryGrant (CSlot 2) and an IrqControl (CSlot 3) at spawn.
+//! this task a MemoryGrant and an IrqControl at spawn.
+//!
+//! Checkpoint H: registers itself as "console" with the name service
+//! (CSlot 1, auto-granted to every task -- see loader.rs in the kernel)
+//! so ping.asm/pong.asm (and any future client) can find it by name
+//! instead of main.rs pre-wiring a capability to it by hand.
 
 #![no_std]
 #![no_main]
@@ -32,10 +34,11 @@ use core::panic::PanicInfo;
 /// buffer to via `map_memory`.
 const VGA_BUFFER_VIRT: u32 = 0x0090_0000;
 
-/// This task's own inbox endpoint -- see the module doc comment.
-const MY_INBOX_SLOT: u32 = 1;
-const VGA_GRANT_SLOT: u32 = 2;
-const IRQ_CONTROL_SLOT: u32 = 3;
+/// This task's own inbox endpoint -- see the module doc comment. CSlot 1
+/// (the name service) is auto-granted, not listed here.
+const MY_INBOX_SLOT: u32 = 2;
+const VGA_GRANT_SLOT: u32 = 3;
+const IRQ_CONTROL_SLOT: u32 = 4;
 
 /// Protocol other tasks use to reach the screen: `send(CONSOLE_SLOT,
 /// OP_PUTCHAR, byte, 0)`, one call per character.
@@ -48,6 +51,7 @@ pub extern "C" fn _start() -> ! {
         libpcern::exit(1);
     }
     libpcern::register_irq(IRQ_CONTROL_SLOT);
+    libpcern::register_name(b"console", MY_INBOX_SLOT);
 
     let mut writer = vga::Writer::new(VGA_BUFFER_VIRT as *mut u16);
     writer.clear_screen();

@@ -39,6 +39,61 @@ pub const SYS_MEM_ALLOC: u32 = 12;
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
 pub const KERNEL_TASK_ID: u32 = 0;
 
+/// Checkpoint H: every task spawned via `loader::spawn_from_module` in the
+/// kernel (main.rs's own spawns, and any task created later via
+/// `create_task`) automatically gets a capability to the name service's
+/// public endpoint installed at this fixed slot -- the one piece of
+/// discovery infrastructure every task can rely on existing without
+/// having to be told about it individually, the same way Unix processes
+/// implicitly inherit fds 0/1/2.
+pub const NAMESERVICE_SLOT: u32 = 1;
+
+/// Name-service wire protocol (see userland/nameservice): `w0`=op,
+/// `w1`/`w2`=an 8-byte name packed via `pack_name`.
+pub const NS_OP_REGISTER: u32 = 1;
+pub const NS_OP_LOOKUP: u32 = 2;
+
+/// Packs up to 8 bytes of `name` into two little-endian u32 words,
+/// zero-padded if shorter (longer names are truncated to 8 bytes). Used
+/// by both sides of the name-service protocol so the encoding only lives
+/// in one place.
+pub fn pack_name(name: &[u8]) -> (u32, u32) {
+    let mut buf = [0u8; 8];
+    let n = name.len().min(8);
+    buf[..n].copy_from_slice(&name[..n]);
+    (
+        u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+        u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+    )
+}
+
+/// Registers `my_endpoint_slot` (typically the caller's own inbox) under
+/// `name` with the name service. Fire-and-forget -- the name service
+/// checks the caller's kernel-attested task id against its own allowlist
+/// and silently drops the request if it isn't authorized to claim that
+/// name, so there's nothing meaningful to report back here.
+pub fn register_name(name: &[u8], my_endpoint_slot: u32) {
+    let (w0, w1) = pack_name(name);
+    send(NAMESERVICE_SLOT, NS_OP_REGISTER, w0, w1, my_endpoint_slot);
+}
+
+/// Looks up `name` via the name service, blocking until it replies.
+/// `my_inbox_slot` is transferred to the name service as the reply-to
+/// address (it has no other way to reach the caller back). Returns a
+/// freshly-installed capability slot in the caller's own CSpace if found,
+/// `None` otherwise.
+#[allow(dead_code)]
+pub fn lookup_name(name: &[u8], my_inbox_slot: u32) -> Option<u32> {
+    let (w0, w1) = pack_name(name);
+    send(NAMESERVICE_SLOT, NS_OP_LOOKUP, w0, w1, my_inbox_slot);
+    let r = recv(my_inbox_slot);
+    if r.w0 == 1 {
+        Some(r.transferred_slot)
+    } else {
+        None
+    }
+}
+
 /// Every register the kernel's syscall ABI might write on return, captured
 /// unconditionally by the asm trampoline regardless of which ones a given
 /// syscall actually uses.

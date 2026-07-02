@@ -1,14 +1,18 @@
-; Checkpoint 5 IPC test, half B: waits for a message from any sender,
-; replies with (received value + 1), 5 rounds. Uses filter=0 (ANY) in recv
-; rather than hardcoding ping's task id, exercising that path of the
-; rendezvous match too.
+; Checkpoint 5 IPC test, half B: waits for a message on its own inbox
+; endpoint, replies with (received value + 1), 5 rounds.
 ;
-; Checkpoint D: output goes through the userspace console server (task id
-; 1) instead of the kernel's now-removed debug_write syscall -- see
-; print_msg below.
+; Checkpoint E: addressing moved from raw task ids to capability slots.
+; recv used to take a `filter=0` (ANY sender) argument; now recv just
+; waits on this task's own inbox endpoint (CSlot 1) and whoever holds a
+; capability to it (only ping, per main.rs's boot-time wiring) can reach
+; it -- same selectivity, now coming from capability possession rather
+; than a runtime filter. The true sender's task id is still reported via
+; `eax` on recv (kernel-attested, unspoofable), which is what lets this
+; task reply to the right peer's endpoint (CSlot 2) without needing a
+; dynamic capability transfer mechanism yet (that's Checkpoint F).
 ;
 ; sender_id/received_value are stashed in static memory rather than kept in
-; registers across syscalls: recv/send both reuse ebx/ecx/edx/esi as
+; registers across syscalls: recv/send both reuse ebx/ecx/edx as
 ; argument/return slots, and only eax/ebx/ecx/edx have byte sub-registers in
 ; 32-bit mode anyway (no REX-only esi/edi byte access here), so memory is
 ; simplest to reason about correctly.
@@ -19,10 +23,11 @@ SYS_EXIT equ 0
 SYS_SEND equ 2
 SYS_RECV equ 3
 
-CONSOLE_TASK_ID equ 1
-OP_PUTCHAR      equ 0
-RECV_ANY equ 0
-ROUNDS   equ 5
+MY_INBOX_SLOT equ 1
+PING_SLOT     equ 2
+CONSOLE_SLOT  equ 3
+OP_PUTCHAR    equ 0
+ROUNDS        equ 5
 
 _start:
     xor edx, edx             ; round counter, preserved via the stack around recv
@@ -30,12 +35,12 @@ _start:
 .loop:
     push edx
     mov eax, SYS_RECV
-    mov ebx, RECV_ANY
+    mov ebx, MY_INBOX_SLOT
     int 0x80
-    ; eax = sender_id, ebx = received value
+    ; eax = sender task id (unused -- ping.asm's PING_SLOT capability is
+    ; how the reply below reaches the right peer), ebx = received value
     pop edx                   ; round counter restored
 
-    mov [saved_sender], eax
     mov [saved_recv], ebx
 
     mov al, bl
@@ -49,10 +54,10 @@ _start:
     mov dword [print_len], msg_len
     call print_msg
 
-    ; send(dest=saved_sender, w0=saved_recv+1, 0, 0, 0); send only touches
+    ; send(dest=PING_SLOT, w0=saved_recv+1, w1=0, w2=0); send only touches
     ; eax, so edx (round) needs no extra saving across this one.
     mov eax, SYS_SEND
-    mov ebx, [saved_sender]
+    mov ebx, PING_SLOT
     mov ecx, [saved_recv]
     inc ecx
     xor esi, esi
@@ -85,7 +90,7 @@ print_msg:
     movzx edx, byte [esi + ebp]
 
     mov eax, SYS_SEND
-    mov ebx, CONSOLE_TASK_ID
+    mov ebx, CONSOLE_SLOT
     mov ecx, OP_PUTCHAR
     xor esi, esi
     xor edi, edi
@@ -107,5 +112,4 @@ msg_part3:   db 10
 msg_end:
 msg_len equ msg_end - msg_part1
 
-saved_sender: dd 0
 saved_recv:   dd 0

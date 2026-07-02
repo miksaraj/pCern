@@ -7,6 +7,9 @@ edition = "2021"
 name = "console_server"
 path = "src/main.rs"
 
+[dependencies]
+libpcern = { path = "../libpcern" }
+
 [profile.dev]
 panic = "abort"
 

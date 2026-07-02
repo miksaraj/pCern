@@ -1,6 +1,6 @@
 //! Synchronous rendezvous IPC: `send` blocks until a matching `recv` is
 //! waiting (and vice versa), at which point the kernel copies a short,
-//! fixed-size (4-word) message directly between the two calls -- no
+//! fixed-size (3-word) message directly between the two calls -- no
 //! kernel-side queues/buffers, no allocation on the hot path.
 //!
 //! The trick that keeps this simple: a blocked task's "return registers"
@@ -8,31 +8,46 @@
 //! are mapped in every address space along with the rest of the kernel, so
 //! whichever call resolves the rendezvous can write the other side's
 //! result directly into them, no cross-address-space buffer copy needed.
+//!
+//! Checkpoint E: messages are addressed to an `Endpoint` object (reached
+//! through a capability -- see cap.rs/task.rs's CSpace) instead of a raw
+//! `TaskId`. Whoever holds a capability for an endpoint can send/recv on
+//! it; there's no more "filter by sender" argument on `recv`; selectivity
+//! now comes entirely from who was handed which capability.
 
 use alloc::vec::Vec;
 
+use crate::cap::EndpointId;
 use crate::scheduler;
 use crate::sync::Mutex;
 use crate::syscall::SavedRegs;
 use crate::task::TaskId;
 
 /// Reserved sender id meaning "the kernel/hardware" -- never a real TaskId
-/// (those start at 1). A driver calls `recv(filter=None or Some(0))` to
-/// wait for its next forwarded interrupt (see notify_interrupt below,
-/// called from IRQ handlers via irq.rs's registration table) the same way
-/// it would wait for a message from any other task.
+/// (those start at 1). Still reported via `eax` on `recv` (see
+/// `notify_interrupt`) even though addressing itself is capability-based
+/// now: a driver still needs to tell "this woke me up because of an
+/// interrupt" apart from "this woke me up because of a message," and the
+/// true sender's identity is cheap, kernel-attested information worth
+/// keeping around regardless.
 pub const KERNEL_TASK_ID: TaskId = 0;
+
+/// Just enough bookkeeping to retire a task's endpoints when it exits (see
+/// `task_exited`) -- nothing reads `owner` otherwise.
+struct EndpointMeta {
+    owner: TaskId,
+}
 
 struct PendingRecv {
     task_id: TaskId,
-    filter: Option<TaskId>,
+    endpoint: EndpointId,
     regs: *mut SavedRegs,
 }
 
 struct PendingSend {
     task_id: TaskId,
-    dest: TaskId,
-    msg: [u32; 4],
+    endpoint: EndpointId,
+    msg: [u32; 3],
     regs: *mut SavedRegs,
 }
 
@@ -42,7 +57,7 @@ struct PendingSend {
 /// events -- e.g. two keystrokes arriving before the console server gets
 /// back around to its next `recv`.
 struct PendingIrqEvent {
-    target: TaskId,
+    endpoint: EndpointId,
     irq: u32,
     data: u32,
 }
@@ -55,19 +70,29 @@ struct PendingIrqEvent {
 unsafe impl Send for PendingRecv {}
 unsafe impl Send for PendingSend {}
 
+static ENDPOINTS: Mutex<Vec<EndpointMeta>> = Mutex::new(Vec::new());
 static PENDING_RECVS: Mutex<Vec<PendingRecv>> = Mutex::new(Vec::new());
 static PENDING_SENDS: Mutex<Vec<PendingSend>> = Mutex::new(Vec::new());
 static PENDING_IRQ_EVENTS: Mutex<Vec<PendingIrqEvent>> = Mutex::new(Vec::new());
 
-/// Delivers `msg` to `dest`: immediately if `dest` is already blocked in a
-/// matching `recv`, otherwise blocks the caller until one arrives.
-pub fn send(self_id: TaskId, dest: TaskId, msg: [u32; 4], regs: *mut SavedRegs) {
+/// Mints a new endpoint object owned by `owner` (used only so
+/// `task_exited` knows which endpoints to retire when that task exits) and
+/// returns its id, to be wrapped in a `cap::CapKind::Endpoint` and
+/// installed into some task's `CSpace`.
+pub fn create_endpoint(owner: TaskId) -> EndpointId {
+    let mut endpoints = ENDPOINTS.lock();
+    let id = endpoints.len();
+    endpoints.push(EndpointMeta { owner });
+    id
+}
+
+/// Delivers `msg` to `endpoint`: immediately if some task is already
+/// blocked in a matching `recv` on it, otherwise blocks the caller until
+/// one arrives.
+pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], regs: *mut SavedRegs) {
     {
         let mut recvs = PENDING_RECVS.lock();
-        if let Some(pos) = recvs
-            .iter()
-            .position(|r| r.task_id == dest && r.filter.map_or(true, |f| f == self_id))
-        {
+        if let Some(pos) = recvs.iter().position(|r| r.endpoint == endpoint) {
             let matched = recvs.remove(pos);
             drop(recvs);
             unsafe {
@@ -75,7 +100,6 @@ pub fn send(self_id: TaskId, dest: TaskId, msg: [u32; 4], regs: *mut SavedRegs) 
                 (*matched.regs).ebx = msg[0];
                 (*matched.regs).ecx = msg[1];
                 (*matched.regs).edx = msg[2];
-                (*matched.regs).esi = msg[3];
                 (*regs).eax = 0;
             }
             scheduler::wake(matched.task_id);
@@ -85,7 +109,7 @@ pub fn send(self_id: TaskId, dest: TaskId, msg: [u32; 4], regs: *mut SavedRegs) 
 
     PENDING_SENDS.lock().push(PendingSend {
         task_id: self_id,
-        dest,
+        endpoint,
         msg,
         regs,
     });
@@ -94,17 +118,14 @@ pub fn send(self_id: TaskId, dest: TaskId, msg: [u32; 4], regs: *mut SavedRegs) 
     // `regs` and woke us -- nothing left to do.
 }
 
-/// Takes a message addressed to `self_id`, optionally only from `filter`:
-/// immediately if a matching `send` (or, when `filter` is `None` or
-/// `Some(KERNEL_TASK_ID)`, a queued interrupt notification) is already
-/// waiting, otherwise blocks the caller until one arrives.
-pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
+/// Takes the next message addressed to `endpoint`: immediately if a
+/// matching `send` (or a queued interrupt notification registered for this
+/// same endpoint -- see `notify_interrupt`) is already waiting, otherwise
+/// blocks the caller until one arrives.
+pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
     {
         let mut sends = PENDING_SENDS.lock();
-        if let Some(pos) = sends
-            .iter()
-            .position(|s| s.dest == self_id && filter.map_or(true, |f| f == s.task_id))
-        {
+        if let Some(pos) = sends.iter().position(|s| s.endpoint == endpoint) {
             let matched = sends.remove(pos);
             drop(sends);
             unsafe {
@@ -112,7 +133,6 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
                 (*regs).ebx = matched.msg[0];
                 (*regs).ecx = matched.msg[1];
                 (*regs).edx = matched.msg[2];
-                (*regs).esi = matched.msg[3];
                 (*matched.regs).eax = 0;
             }
             scheduler::wake(matched.task_id);
@@ -120,9 +140,9 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
         }
     }
 
-    if filter.map_or(true, |f| f == KERNEL_TASK_ID) {
+    {
         let mut events = PENDING_IRQ_EVENTS.lock();
-        if let Some(pos) = events.iter().position(|e| e.target == self_id) {
+        if let Some(pos) = events.iter().position(|e| e.endpoint == endpoint) {
             let event = events.remove(pos);
             drop(events);
             unsafe {
@@ -130,7 +150,6 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
                 (*regs).ebx = event.irq;
                 (*regs).ecx = event.data;
                 (*regs).edx = 0;
-                (*regs).esi = 0;
             }
             return;
         }
@@ -138,7 +157,7 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
 
     PENDING_RECVS.lock().push(PendingRecv {
         task_id: self_id,
-        filter,
+        endpoint,
         regs,
     });
     scheduler::block_current();
@@ -146,17 +165,16 @@ pub fn recv(self_id: TaskId, filter: Option<TaskId>, regs: *mut SavedRegs) {
     // result into `regs` and woke us -- nothing left to do.
 }
 
-/// Forwards a hardware interrupt to `target`: delivers immediately if it's
-/// already blocked in a matching `recv`, otherwise queues the event so the
-/// next matching `recv` sees it right away. Never blocks -- this is called
-/// directly from interrupt context (see keyboard.rs), which must ack and
-/// return promptly, not suspend waiting for a receiver.
-pub fn notify_interrupt(target: TaskId, irq: u32, data: u32) {
+/// Forwards a hardware interrupt to whoever holds `endpoint` (registered
+/// via the register_for_interrupt syscall -- see irq.rs): delivers
+/// immediately if a task is already blocked in a matching `recv`,
+/// otherwise queues the event so the next matching `recv` sees it right
+/// away. Never blocks -- this is called directly from interrupt context
+/// (see keyboard.rs), which must ack and return promptly, not suspend
+/// waiting for a receiver.
+pub fn notify_interrupt(endpoint: EndpointId, irq: u32, data: u32) {
     let mut recvs = PENDING_RECVS.lock();
-    if let Some(pos) = recvs
-        .iter()
-        .position(|r| r.task_id == target && r.filter.map_or(true, |f| f == KERNEL_TASK_ID))
-    {
+    if let Some(pos) = recvs.iter().position(|r| r.endpoint == endpoint) {
         let matched = recvs.remove(pos);
         drop(recvs);
         unsafe {
@@ -164,26 +182,38 @@ pub fn notify_interrupt(target: TaskId, irq: u32, data: u32) {
             (*matched.regs).ebx = irq;
             (*matched.regs).ecx = data;
             (*matched.regs).edx = 0;
-            (*matched.regs).esi = 0;
         }
         scheduler::wake(matched.task_id);
         return;
     }
     drop(recvs);
 
-    PENDING_IRQ_EVENTS.lock().push(PendingIrqEvent { target, irq, data });
+    PENDING_IRQ_EVENTS.lock().push(PendingIrqEvent { endpoint, irq, data });
 }
 
-/// Called when `task_id` exits: without this, a task blocked waiting to
-/// send to or receive from `task_id` would never be matched (its partner
-/// is gone) and would stay `Blocked` forever with no error and no wake, a
-/// silent permanent hang. Wakes every such waiter with a failure
-/// (`eax = u32::MAX`, matching the "unknown syscall" sentinel elsewhere)
-/// instead, and drops the now-meaningless pending entries.
+/// Called when `task_id` exits: retires every endpoint it owned, waking
+/// (with a failure, `eax = u32::MAX`, matching the "unknown syscall"
+/// sentinel elsewhere) anything blocked send/recv-ing on one of them --
+/// without this, a task waiting on an endpoint whose owner just vanished
+/// would stay `Blocked` forever with no error and no wake, a silent
+/// permanent hang. A task can't be both `Blocked` and exiting itself
+/// (`exit_current` requires being the *running* task), so there's no need
+/// to separately clean up entries where `task_id` itself is the blocked
+/// party.
 pub fn task_exited(task_id: TaskId) {
+    let dead_endpoints: Vec<EndpointId> = {
+        let endpoints = ENDPOINTS.lock();
+        endpoints
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.owner == task_id)
+            .map(|(id, _)| id)
+            .collect()
+    };
+
     let mut recvs = PENDING_RECVS.lock();
     recvs.retain(|r| {
-        if r.filter == Some(task_id) {
+        if dead_endpoints.contains(&r.endpoint) {
             unsafe { (*r.regs).eax = u32::MAX };
             scheduler::wake(r.task_id);
             false
@@ -195,7 +225,7 @@ pub fn task_exited(task_id: TaskId) {
 
     let mut sends = PENDING_SENDS.lock();
     sends.retain(|s| {
-        if s.dest == task_id {
+        if dead_endpoints.contains(&s.endpoint) {
             unsafe { (*s.regs).eax = u32::MAX };
             scheduler::wake(s.task_id);
             false
@@ -207,6 +237,6 @@ pub fn task_exited(task_id: TaskId) {
 
     // No one to wake here (nothing was blocked on these, or they'd have
     // been delivered already) -- just drop them so they don't sit around
-    // forever addressed to a task that no longer exists.
-    PENDING_IRQ_EVENTS.lock().retain(|e| e.target != task_id);
+    // forever addressed to an endpoint whose owner no longer exists.
+    PENDING_IRQ_EVENTS.lock().retain(|e| !dead_endpoints.contains(&e.endpoint));
 }

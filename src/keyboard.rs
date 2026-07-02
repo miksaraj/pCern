@@ -13,8 +13,8 @@ use crate::port::inb;
 pub extern "x86-interrupt" fn handler(_frame: InterruptStackFrame) {
     let scancode = unsafe { inb(0x60) };
 
-    if let Some(driver) = irq::handler_for(1) {
-        ipc::notify_interrupt(driver, 1, scancode as u32);
+    if let Some(endpoint) = irq::handler_for(1) {
+        ipc::notify_interrupt(endpoint, 1, scancode as u32);
     }
 
     pic::send_eoi(1);

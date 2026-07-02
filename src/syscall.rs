@@ -1,5 +1,6 @@
 use core::arch::global_asm;
 
+use crate::cap::{self, CapKind};
 use crate::ipc;
 use crate::irq;
 use crate::loader;
@@ -23,6 +24,7 @@ const SYS_GETPID: u32 = 4;
 const SYS_REGISTER_IRQ: u32 = 6;
 const SYS_MAP_MEMORY: u32 = 7;
 const SYS_CREATE_TASK: u32 = 8;
+const SYS_ENDPOINT_CREATE: u32 = 9;
 
 /// Error sentinel returned in `eax` by the privileged syscalls
 /// (register_for_interrupt, map_memory) when the caller isn't
@@ -46,6 +48,14 @@ pub struct SavedRegs {
     pub ebp: u32,
 }
 
+/// Resolves a capability slot in the *current* task's own `CSpace`. Every
+/// syscall that takes a capability argument goes through this -- an
+/// unrecognized or empty slot just resolves to `None`, never panics, since
+/// the slot number comes straight from untrusted userspace.
+fn resolve_current_cap(slot: u32) -> Option<CapKind> {
+    cap::resolve(scheduler::current_cspace_get(slot)?)
+}
+
 #[no_mangle]
 extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
     let regs = unsafe { &mut *regs };
@@ -58,21 +68,27 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             scheduler::yield_now();
             regs.eax = 0;
         }
-        SYS_SEND => {
-            let dest = regs.ebx as usize;
-            let msg = [regs.ecx, regs.edx, regs.esi, regs.edi];
-            ipc::send(self_id, dest, msg, regs as *mut SavedRegs);
-        }
-        SYS_RECV => {
-            let filter = if regs.ebx == 0 { None } else { Some(regs.ebx as usize) };
-            ipc::recv(self_id, filter, regs as *mut SavedRegs);
-        }
+        SYS_SEND => match resolve_current_cap(regs.ebx) {
+            Some(CapKind::Endpoint { id }) => {
+                let msg = [regs.ecx, regs.edx, regs.esi];
+                ipc::send(self_id, id, msg, regs as *mut SavedRegs);
+            }
+            _ => regs.eax = ERR,
+        },
+        SYS_RECV => match resolve_current_cap(regs.ebx) {
+            Some(CapKind::Endpoint { id }) => ipc::recv(self_id, id, regs as *mut SavedRegs),
+            _ => regs.eax = ERR,
+        },
         SYS_GETPID => regs.eax = self_id as u32,
         SYS_REGISTER_IRQ => {
-            regs.eax = if scheduler::current_is_driver() && irq::register(regs.ebx, self_id) {
-                0
-            } else {
-                ERR
+            // `ebx`=irq number, `ecx`=capability slot for the endpoint to
+            // target. Still gated by the same is_driver bool as before --
+            // Checkpoint G tightens this to a real per-irq IrqControl
+            // capability instead of "any driver can register for any irq".
+            let irq_num = regs.ebx;
+            regs.eax = match (scheduler::current_is_driver(), resolve_current_cap(regs.ecx)) {
+                (true, Some(CapKind::Endpoint { id })) if irq::register(irq_num, id) => 0,
+                _ => ERR,
             };
         }
         SYS_MAP_MEMORY => {
@@ -92,6 +108,11 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
                 Some(id) => id as u32,
                 None => 0,
             };
+        }
+        SYS_ENDPOINT_CREATE => {
+            let endpoint = ipc::create_endpoint(self_id);
+            let node = cap::mint_root(CapKind::Endpoint { id: endpoint });
+            regs.eax = scheduler::current_cspace_install(node);
         }
         _ => regs.eax = ERR,
     }

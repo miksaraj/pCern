@@ -2,12 +2,40 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::arch::global_asm;
 
+use crate::cap::{CSlot, CapNodeId};
 use crate::mm::paging;
 use crate::sync::Mutex;
 
 global_asm!(include_str!("task_asm.s"));
 
 pub type TaskId = usize;
+
+/// A task's private capability table: `CSlot` (the handle syscalls take)
+/// is just an index into this. Unforgeable because the kernel is the only
+/// thing that ever pushes an entry -- userspace can hold a slot number but
+/// can never manufacture one that resolves to something it wasn't actually
+/// granted.
+pub struct CSpace {
+    slots: Vec<Option<CapNodeId>>,
+}
+
+impl CSpace {
+    /// Slot 0 is always empty, mirroring the "0 is a reserved sentinel"
+    /// convention already used for `ipc::KERNEL_TASK_ID`.
+    pub fn new() -> CSpace {
+        CSpace { slots: alloc::vec![None] }
+    }
+
+    /// Installs `node` into the next free slot and returns its index.
+    pub fn install(&mut self, node: CapNodeId) -> CSlot {
+        self.slots.push(Some(node));
+        (self.slots.len() - 1) as CSlot
+    }
+
+    pub fn get(&self, slot: CSlot) -> Option<CapNodeId> {
+        self.slots.get(slot as usize).copied().flatten()
+    }
+}
 
 const KERNEL_STACK_SIZE: usize = 16 * 1024;
 /// Reserved bit 1 (always 1) + IF: a freshly created task starts with
@@ -46,6 +74,8 @@ pub struct Task {
     /// the TSS I/O bitmap by `gdt::set_io_permissions` whenever the
     /// scheduler switches to this task. Empty for ordinary tasks.
     pub allowed_ports: Vec<u16>,
+    /// This task's capability table -- see `CSpace` above.
+    pub cspace: CSpace,
     // Kept only to own the stack allocation for the task's lifetime; also
     // doubles as this task's ring0 stack (TSS.esp0) once it's ring 3.
     #[allow(dead_code)]
@@ -116,6 +146,7 @@ impl Task {
             page_dir_phys: paging::boot_page_directory_phys(),
             is_driver: false,
             allowed_ports: Vec::new(),
+            cspace: CSpace::new(),
             stack,
         }
     }
@@ -161,6 +192,7 @@ impl Task {
             page_dir_phys,
             is_driver,
             allowed_ports: allowed_ports.to_vec(),
+            cspace: CSpace::new(),
             stack,
         }
     }

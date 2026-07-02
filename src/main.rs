@@ -11,6 +11,7 @@ use core::panic::PanicInfo;
 global_asm!(include_str!("boot.s"));
 
 mod ansi;
+mod cap;
 mod exceptions;
 mod gdt;
 mod idt;
@@ -96,41 +97,63 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // Spawned first so it always gets task id 1 (id 0 is the reserved
     // KERNEL_TASK_ID pseudo-sender -- see ipc.rs): driver-flagged, with
     // port access to the keyboard controller and CRTC, since it owns both
-    // the keyboard and VGA/ANSI console now (Checkpoint D). ping.asm/
-    // pong.asm hardcode this id (CONSOLE_TASK_ID) to reach it.
+    // the keyboard and VGA/ANSI console now (Checkpoint D).
     const CONSOLE_SERVER_PORTS: [u16; 4] = [0x60, 0x64, 0x3D4, 0x3D5];
-    match loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS) {
-        Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", id),
-        None => println!("[ \x1b[1;33mwarn\x1b[0m ] no multiboot module 0 found, skipping 'console_server'"),
-    }
+    let console_id = loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS)
+        .expect("no multiboot module 0 found for 'console_server'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", console_id);
+
+    // Checkpoint E: there's no name service yet (that's Checkpoint H), so
+    // every endpoint capability a task needs to reach at boot is wired up
+    // here by hand, right after spawning -- this is trusted kernel code,
+    // so directly minting capabilities into another task's own CSpace
+    // (via scheduler::install_cap_for) is safe the same way is_driver/
+    // allowed_ports already are. Fixed convention every userland program
+    // below relies on: CSlot 1 = "my own inbox" (for recv), CSlot 2+ =
+    // whichever peers it was granted a capability to talk to.
+    let console_endpoint = ipc::create_endpoint(console_id);
+    let console_inbox_slot = grant_endpoint_cap(console_id, console_endpoint);
+    debug_assert_eq!(console_inbox_slot, 1, "console_server's own inbox must land at CSlot 1");
+    irq::register(1, console_endpoint);
 
     scheduler::spawn_kernel_task(task_a);
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    // Spawn order matters: ping.asm hardcodes pong's task id (5), which
-    // depends on console_server (1), task_a/task_b (2, 3), and ping itself
-    // (4) being spawned first in exactly this order -- see userland/ping.asm.
-    for (index, name) in [(1, "ping"), (2, "pong")] {
-        match loader::spawn_from_module(index, false, &[]) {
-            Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task '{}' (id={})", name, id),
-            None => println!(
-                "[ \x1b[1;33mwarn\x1b[0m ] no multiboot module {} found, skipping '{}'",
-                index, name
-            ),
-        }
-    }
+    let ping_id = loader::spawn_from_module(1, false, &[]).expect("no multiboot module 1 found for 'ping'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'ping' (id={})", ping_id);
+    let ping_endpoint = ipc::create_endpoint(ping_id);
+    grant_endpoint_cap(ping_id, ping_endpoint); // ping's CSlot 1: its own inbox
 
-    // Spawned last so it doesn't shift ping's hardcoded PONG_TASK_ID. Never
-    // blocks or exits, so block_current()/exit_current() always have at
-    // least one task to fall back to instead of panicking when every "real"
-    // task is blocked/exited.
+    let pong_id = loader::spawn_from_module(2, false, &[]).expect("no multiboot module 2 found for 'pong'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'pong' (id={})", pong_id);
+    let pong_endpoint = ipc::create_endpoint(pong_id);
+    grant_endpoint_cap(pong_id, pong_endpoint); // pong's CSlot 1: its own inbox
+
+    grant_endpoint_cap(ping_id, pong_endpoint); // ping's CSlot 2: send to pong
+    grant_endpoint_cap(pong_id, ping_endpoint); // pong's CSlot 2: send to ping
+    grant_endpoint_cap(ping_id, console_endpoint); // ping's CSlot 3: send to console_server
+    grant_endpoint_cap(pong_id, console_endpoint); // pong's CSlot 3: send to console_server
+
+    // Spawned last so it doesn't shift ping's/pong's task ids. Never blocks
+    // or exits, so block_current()/exit_current() always have at least one
+    // task to fall back to instead of panicking when every "real" task is
+    // blocked/exited.
     scheduler::spawn_kernel_task(idle_task);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned idle task");
     println!("[ \x1b[1;32mok\x1b[0m ] handing off to the scheduler");
     println!();
 
     scheduler::start();
+}
+
+/// Mints a fresh root capability for `endpoint` and installs it into
+/// `task_id`'s own CSpace, returning the slot it landed in. A thin wrapper
+/// around `cap::mint_root`+`scheduler::install_cap_for` just to keep the
+/// boot-time wiring above readable.
+fn grant_endpoint_cap(task_id: task::TaskId, endpoint: cap::EndpointId) -> cap::CSlot {
+    let node = cap::mint_root(cap::CapKind::Endpoint { id: endpoint });
+    scheduler::install_cap_for(task_id, node)
 }
 
 extern "C" fn idle_task() -> ! {

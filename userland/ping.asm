@@ -1,12 +1,18 @@
 ; Checkpoint 5 IPC test, half A: sends an incrementing counter to `pong`
-; (task id 5 -- see main.rs, which spawns console_server, task_a, task_b,
-; ping, then pong in that fixed order) and waits for its reply, 5 rounds,
-; proving synchronous rendezvous send/recv works correctly across two
-; separate address spaces.
+; and waits for its reply, 5 rounds, proving synchronous rendezvous
+; send/recv works correctly across two separate address spaces.
 ;
-; Checkpoint D: output goes through the userspace console server (task id
-; 1) instead of the kernel's now-removed debug_write syscall -- see
-; print_msg below.
+; Checkpoint E: addressing moved from raw task ids to capability slots.
+; There's no name service yet (Checkpoint H), so main.rs wires every
+; task's capabilities by hand right after spawning: CSlot 1 is always
+; this task's own inbox endpoint (for recv), CSlot 2/3 are peer endpoints
+; it was granted a capability to send to. Selectivity that used to come
+; from recv's `filter` argument now comes from capability possession
+; instead -- only pong holds a capability to *this* task's inbox, so
+; recv(MY_INBOX_SLOT) only ever wakes for a message from pong.
+;
+; Checkpoint D+: output goes through the userspace console server instead
+; of the kernel's debug_write syscall -- see print_msg below.
 ;
 ; Note: only eax/ebx/ecx/edx have byte sub-registers (al/bl/cl/dl) in
 ; 32-bit mode -- esi/edi/ebp do not (that needs a REX prefix, x86-64 only)
@@ -18,29 +24,31 @@ SYS_EXIT equ 0
 SYS_SEND equ 2
 SYS_RECV equ 3
 
-CONSOLE_TASK_ID equ 1
-OP_PUTCHAR      equ 0
-PONG_TASK_ID    equ 5
-ROUNDS          equ 5
+MY_INBOX_SLOT equ 1
+PONG_SLOT     equ 2
+CONSOLE_SLOT  equ 3
+OP_PUTCHAR    equ 0
+ROUNDS        equ 5
 
 _start:
     xor edx, edx            ; round counter
 
 .loop:
-    ; send(dest=PONG_TASK_ID, w0=round, 0, 0, 0); dispatcher only touches
-    ; eax for a successful send, so edx (round) survives this untouched.
+    ; send(dest=PONG_SLOT, w0=round, w1=whatever's in edx (harmless), w2=0,
+    ; transfer=none). Dispatcher only touches eax for a successful send, so
+    ; edx (round) survives this untouched.
     mov eax, SYS_SEND
-    mov ebx, PONG_TASK_ID
+    mov ebx, PONG_SLOT
     mov ecx, edx
     xor esi, esi
     xor edi, edi
     int 0x80
 
-    ; recv(filter=PONG_TASK_ID) -> ebx = reply word; recv overwrites
-    ; ebx/ecx/edx/esi as return slots, so save the round counter first.
+    ; recv(MY_INBOX_SLOT) -> ebx = reply value (w0); recv overwrites
+    ; ebx/ecx/edx as return slots, so save the round counter first.
     push edx
     mov eax, SYS_RECV
-    mov ebx, PONG_TASK_ID
+    mov ebx, MY_INBOX_SLOT
     int 0x80
     mov ecx, ebx             ; ecx = reply value
     pop edx                  ; edx = round, restored
@@ -82,7 +90,7 @@ print_msg:
     movzx edx, byte [esi + ebp]
 
     mov eax, SYS_SEND
-    mov ebx, CONSOLE_TASK_ID
+    mov ebx, CONSOLE_SLOT
     mov ecx, OP_PUTCHAR
     xor esi, esi
     xor edi, edi

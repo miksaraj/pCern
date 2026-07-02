@@ -27,11 +27,12 @@ const SYS_CREATE_TASK: u32 = 8;
 const SYS_ENDPOINT_CREATE: u32 = 9;
 const SYS_CAP_MINT_BADGED: u32 = 10;
 const SYS_CAP_REVOKE: u32 = 11;
+const SYS_MEM_ALLOC: u32 = 12;
 
-/// Error sentinel returned in `eax` by the privileged syscalls
-/// (register_for_interrupt, map_memory) when the caller isn't
-/// driver-flagged or the request is otherwise invalid. Real task ids and
-/// successful map_memory results (0) never collide with this.
+/// Error sentinel returned in `eax` when a capability argument doesn't
+/// resolve to what a syscall needed, or the request is otherwise invalid.
+/// Real task ids and successful map_memory results (0) never collide with
+/// this.
 const ERR: u32 = u32::MAX;
 
 /// The GP registers syscall_isr (syscall_asm.s) saves, in the exact order
@@ -109,30 +110,33 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
         },
         SYS_GETPID => regs.eax = self_id as u32,
         SYS_REGISTER_IRQ => {
-            // `ebx`=irq number, `ecx`=capability slot for the endpoint to
-            // target. Still gated by the same is_driver bool as before --
-            // Checkpoint G tightens this to a real per-irq IrqControl
-            // capability instead of "any driver can register for any irq".
-            let irq_num = regs.ebx;
-            regs.eax = match (scheduler::current_is_driver(), resolve_current_cap(regs.ecx)) {
-                (true, Some((CapKind::Endpoint { id }, _badge))) if irq::register(irq_num, id) => 0,
+            // `ebx`=capability slot holding an IrqControl (bundles which
+            // irq and which endpoint to target -- see cap.rs). Holding a
+            // valid one is itself sufficient authorization, the same way
+            // holding a MemoryGrant is for SYS_MAP_MEMORY below: only
+            // trusted spawn code (main.rs) ever mints one.
+            regs.eax = match resolve_current_cap(regs.ebx) {
+                Some((CapKind::IrqControl { irq: irq_num, endpoint }, _badge)) if irq::register(irq_num, endpoint) => 0,
                 _ => ERR,
             };
         }
         SYS_MAP_MEMORY => {
-            regs.eax = if scheduler::current_is_driver() {
-                sys_map_memory(regs.ebx as usize, regs.ecx as usize, regs.edx as usize)
-            } else {
-                ERR
+            // `ebx`=capability slot holding a MemoryGrant, `ecx`=virt_addr
+            // to map it at in the caller's own address space.
+            regs.eax = match resolve_current_cap(regs.ebx) {
+                Some((CapKind::MemoryGrant { phys_base, len, writable }, _badge)) => {
+                    sys_map_memory(phys_base, regs.ecx as usize, len, writable)
+                }
+                _ => ERR,
             };
         }
         SYS_CREATE_TASK => {
             let module_index = regs.ebx as usize;
-            // Always spawned as an ordinary (non-driver) task, regardless
-            // of whether the caller itself is one -- privilege is never
-            // delegable through this syscall, only grantable by the
-            // kernel's own internal spawn code (see loader.rs/main.rs).
-            regs.eax = match loader::spawn_from_module(module_index, false, &[]) {
+            // Always spawned with no ports and no capabilities beyond
+            // whatever it's granted later -- privilege is never delegable
+            // through this syscall, only grantable by the kernel's own
+            // internal spawn code (see loader.rs/main.rs).
+            regs.eax = match loader::spawn_from_module(module_index, &[]) {
                 Some(id) => id as u32,
                 None => 0,
             };
@@ -163,37 +167,60 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             }
             regs.eax = 0;
         }
+        SYS_MEM_ALLOC => {
+            // `ebx`=virt_addr to map a freshly allocated page at in the
+            // caller's own address space. Returns a capability slot for a
+            // MemoryGrant describing that same page, which can then be
+            // handed to another task (via send's transfer slot) so it can
+            // map the *same* physical page into its own space too -- the
+            // bulk data transfer primitive later checkpoints build on.
+            // Capped at exactly one page: mm::frame only hands out single
+            // frames today, no contiguous-multi-frame allocation exists.
+            regs.eax = sys_mem_alloc(regs.ebx as usize);
+        }
         _ => regs.eax = ERR,
     }
 }
 
-/// Maps `len` bytes of physical memory at `phys_addr` into the calling
-/// (already-verified driver) task's own address space at `virt_addr`.
-/// Restricted to a small allowlist of known-safe MMIO ranges (just the VGA
-/// text buffer for now) -- without that, "driver" would be equivalent to
-/// unrestricted physical memory access, i.e. a full privilege escalation
-/// for the one flag this kernel currently grants at all.
-fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize) -> u32 {
-    const VGA_BUFFER_PHYS: usize = 0xB8000;
-    const VGA_BUFFER_LEN: usize = 0x1000;
-
+/// Maps the physical range described by a resolved MemoryGrant capability
+/// into the calling task's own address space at `virt_addr`. Holding a
+/// valid capability is itself sufficient authorization -- only trusted
+/// code (main.rs's boot-time wiring, or this same syscall's own
+/// SYS_MEM_ALLOC path) ever mints a MemoryGrant in the first place, so
+/// there's no separate allowlist check needed here anymore.
+fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize, writable: bool) -> u32 {
     if phys_addr % mm::frame::FRAME_SIZE != 0 || virt_addr % mm::frame::FRAME_SIZE != 0 || len == 0 {
         return ERR;
     }
-    let Some(phys_end) = phys_addr.checked_add(len) else {
-        return ERR;
-    };
-    let in_allowlist = phys_addr >= VGA_BUFFER_PHYS && phys_end <= VGA_BUFFER_PHYS + VGA_BUFFER_LEN;
-    if !in_allowlist {
-        return ERR;
-    }
-
     let mut page_dir = mm::paging::PageDirectory::from_phys(scheduler::current_page_dir_phys());
     let pages = len.div_ceil(mm::frame::FRAME_SIZE);
     for i in 0..pages {
         let offset = i * mm::frame::FRAME_SIZE;
-        page_dir.map_page(virt_addr + offset, phys_addr + offset, true, true);
+        page_dir.map_page(virt_addr + offset, phys_addr + offset, true, writable);
     }
     0
+}
+
+/// Allocates one fresh physical frame, maps it into the caller's own
+/// address space at `virt_addr`, and mints a capability describing it.
+/// Returns `0` (an empty/invalid slot, indistinguishable from failure --
+/// there's nothing sensitive about "you're out of memory" worth a
+/// separate error channel here) if `virt_addr` isn't page-aligned or
+/// allocation fails.
+fn sys_mem_alloc(virt_addr: usize) -> u32 {
+    if virt_addr % mm::frame::FRAME_SIZE != 0 {
+        return 0;
+    }
+    let Some(phys) = mm::frame::alloc_frame() else {
+        return 0;
+    };
+    let mut page_dir = mm::paging::PageDirectory::from_phys(scheduler::current_page_dir_phys());
+    page_dir.map_page(virt_addr, phys, true, true);
+    let node = cap::mint_root(CapKind::MemoryGrant {
+        phys_base: phys,
+        len: mm::frame::FRAME_SIZE,
+        writable: true,
+    });
+    scheduler::current_cspace_install(node)
 }
 

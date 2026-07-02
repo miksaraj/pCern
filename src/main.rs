@@ -95,37 +95,54 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     println!("[ \x1b[1;32mok\x1b[0m ] interrupts enabled");
 
     // Spawned first so it always gets task id 1 (id 0 is the reserved
-    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs): driver-flagged, with
-    // port access to the keyboard controller and CRTC, since it owns both
-    // the keyboard and VGA/ANSI console now (Checkpoint D).
+    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs), with port access to the
+    // keyboard controller and CRTC, since it owns both the keyboard and
+    // VGA/ANSI console now (Checkpoint D).
     const CONSOLE_SERVER_PORTS: [u16; 4] = [0x60, 0x64, 0x3D4, 0x3D5];
-    let console_id = loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS)
-        .expect("no multiboot module 0 found for 'console_server'");
+    let console_id =
+        loader::spawn_from_module(0, &CONSOLE_SERVER_PORTS).expect("no multiboot module 0 found for 'console_server'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", console_id);
 
     // Checkpoint E: there's no name service yet (that's Checkpoint H), so
-    // every endpoint capability a task needs to reach at boot is wired up
-    // here by hand, right after spawning -- this is trusted kernel code,
-    // so directly minting capabilities into another task's own CSpace
-    // (via scheduler::install_cap_for) is safe the same way is_driver/
-    // allowed_ports already are. Fixed convention every userland program
-    // below relies on: CSlot 1 = "my own inbox" (for recv), CSlot 2+ =
-    // whichever peers it was granted a capability to talk to.
+    // every capability a task needs to reach at boot is wired up here by
+    // hand, right after spawning -- this is trusted kernel code, so
+    // directly minting capabilities into another task's own CSpace (via
+    // scheduler::install_cap_for) is safe the same way allowed_ports
+    // already is. Fixed convention every userland program below relies
+    // on: CSlot 1 = "my own inbox" (for recv), CSlot 2+ = whichever peers/
+    // memory/irq capabilities it was granted.
     let console_endpoint = ipc::create_endpoint(console_id);
     let console_inbox_slot = grant_endpoint_cap(console_id, console_endpoint);
     debug_assert_eq!(console_inbox_slot, 1, "console_server's own inbox must land at CSlot 1");
-    irq::register(1, console_endpoint);
+
+    // Checkpoint G: console_server's VGA/keyboard access is now capability-
+    // mediated instead of the old is_driver bool + hardcoded allowlist --
+    // it must present these to map_memory/register_irq itself, the same
+    // as any other task would.
+    const VGA_BUFFER_PHYS: usize = 0xB8000;
+    const VGA_BUFFER_LEN: usize = 0x1000;
+    let vga_grant = cap::mint_root(cap::CapKind::MemoryGrant {
+        phys_base: VGA_BUFFER_PHYS,
+        len: VGA_BUFFER_LEN,
+        writable: true,
+    });
+    let vga_slot = scheduler::install_cap_for(console_id, vga_grant);
+    debug_assert_eq!(vga_slot, 2, "console_server's VGA grant must land at CSlot 2");
+
+    let irq_control = cap::mint_root(cap::CapKind::IrqControl { irq: 1, endpoint: console_endpoint });
+    let irq_slot = scheduler::install_cap_for(console_id, irq_control);
+    debug_assert_eq!(irq_slot, 3, "console_server's IrqControl must land at CSlot 3");
 
     scheduler::spawn_kernel_task(task_a);
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    let ping_id = loader::spawn_from_module(1, false, &[]).expect("no multiboot module 1 found for 'ping'");
+    let ping_id = loader::spawn_from_module(1, &[]).expect("no multiboot module 1 found for 'ping'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'ping' (id={})", ping_id);
     let ping_endpoint = ipc::create_endpoint(ping_id);
     grant_endpoint_cap(ping_id, ping_endpoint); // ping's CSlot 1: its own inbox
 
-    let pong_id = loader::spawn_from_module(2, false, &[]).expect("no multiboot module 2 found for 'pong'");
+    let pong_id = loader::spawn_from_module(2, &[]).expect("no multiboot module 2 found for 'pong'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'pong' (id={})", pong_id);
     let pong_endpoint = ipc::create_endpoint(pong_id);
     grant_endpoint_cap(pong_id, pong_endpoint); // pong's CSlot 1: its own inbox

@@ -32,17 +32,20 @@ pub enum CapKind {
     Endpoint {
         id: EndpointId,
     },
-    /// Wired up starting Checkpoint G (VGA buffer, shared bulk-transfer
-    /// pages); the variant exists now so its shape doesn't need to change
-    /// once something actually constructs one.
-    #[allow(dead_code)]
+    /// A physical range the holder may `map_memory` into their own address
+    /// space -- either the VGA buffer (minted once at console_server's
+    /// spawn) or fresh anonymous RAM (minted by `SYS_MEM_ALLOC`, then
+    /// optionally transferred to a peer as the bulk-data-sharing
+    /// primitive later checkpoints use).
     MemoryGrant {
         phys_base: usize,
         len: usize,
         writable: bool,
     },
-    /// Wired up starting Checkpoint G.
-    #[allow(dead_code)]
+    /// Permission to register for a specific hardware irq, targeting a
+    /// specific endpoint -- bundling both means holding the capability is
+    /// itself sufficient authorization for `SYS_REGISTER_IRQ`, no separate
+    /// "and are you allowed to pick this irq/endpoint" check needed.
     IrqControl {
         irq: u32,
         endpoint: EndpointId,

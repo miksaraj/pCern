@@ -33,6 +33,7 @@ pub const SYS_CREATE_TASK: u32 = 8;
 pub const SYS_ENDPOINT_CREATE: u32 = 9;
 pub const SYS_CAP_MINT_BADGED: u32 = 10;
 pub const SYS_CAP_REVOKE: u32 = 11;
+pub const SYS_MEM_ALLOC: u32 = 12;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -111,17 +112,30 @@ pub fn getpid() -> u32 {
     unsafe { syscall_raw(SYS_GETPID, 0, 0, 0, 0, 0) }.eax
 }
 
-/// Returns 0 on success, nonzero if the caller isn't driver-flagged or
-/// `endpoint_slot` isn't a valid capability.
+/// Returns 0 on success, nonzero if `irq_control_slot` doesn't resolve to
+/// a valid IrqControl capability (which itself bundles which irq and
+/// which endpoint to target -- see cap.rs in the kernel).
 #[allow(dead_code)]
-pub fn register_irq(irq: u32, endpoint_slot: u32) -> i32 {
-    unsafe { syscall_raw(SYS_REGISTER_IRQ, irq, endpoint_slot, 0, 0, 0) }.eax as i32
+pub fn register_irq(irq_control_slot: u32) -> i32 {
+    unsafe { syscall_raw(SYS_REGISTER_IRQ, irq_control_slot, 0, 0, 0, 0) }.eax as i32
 }
 
-/// Returns 0 on success, nonzero if the caller isn't driver-flagged or the
-/// physical range isn't on the kernel's MMIO allowlist.
-pub fn map_memory(phys_addr: u32, virt_addr: u32, len: u32) -> i32 {
-    unsafe { syscall_raw(SYS_MAP_MEMORY, phys_addr, virt_addr, len, 0, 0) }.eax as i32
+/// Maps the physical range described by `grant_slot` (a MemoryGrant
+/// capability -- see cap.rs in the kernel) into the caller's own address
+/// space at `virt_addr`. Returns 0 on success, nonzero if `grant_slot`
+/// isn't a valid MemoryGrant.
+pub fn map_memory(grant_slot: u32, virt_addr: u32) -> i32 {
+    unsafe { syscall_raw(SYS_MAP_MEMORY, grant_slot, virt_addr, 0, 0, 0) }.eax as i32
+}
+
+/// Allocates one fresh physical page, maps it into the caller's own
+/// address space at `virt_addr`, and returns a capability slot for a
+/// MemoryGrant describing it (`0` on failure) -- which can then be handed
+/// to a peer task (via `send`'s transfer slot) so it can map the *same*
+/// physical page into its own space too.
+#[allow(dead_code)]
+pub fn mem_alloc(virt_addr: u32) -> u32 {
+    unsafe { syscall_raw(SYS_MEM_ALLOC, virt_addr, 0, 0, 0, 0) }.eax
 }
 
 /// Returns the new task's id, or 0 if `module_index` doesn't exist.

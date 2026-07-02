@@ -42,11 +42,12 @@ pub fn reserve_all_modules() {
 /// a small stack, and spawns it. Returns `None` if there aren't that many
 /// modules.
 ///
-/// `is_driver`/`allowed_ports` grant the privileged syscalls and port
-/// access -- callers reachable from untrusted code (the create_task
-/// syscall) must always pass `false`/`&[]`, so untrusted code can never
-/// grant itself or a child task hardware access.
-pub fn spawn_from_module(index: usize, is_driver: bool, allowed_ports: &[u16]) -> Option<TaskId> {
+/// `allowed_ports` grants port access -- callers reachable from untrusted
+/// code (the create_task syscall) must always pass `&[]`, so untrusted
+/// code can never grant itself or a child task port access. Memory/IRQ
+/// access aren't spawn-time flags at all -- see cap.rs -- so there's
+/// nothing analogous to gate here for those.
+pub fn spawn_from_module(index: usize, allowed_ports: &[u16]) -> Option<TaskId> {
     let module = {
         let mb_info = MB_INFO.lock();
         mb_info.as_ref().expect("loader::init not called yet").module(index)?
@@ -78,12 +79,6 @@ pub fn spawn_from_module(index: usize, is_driver: bool, allowed_ports: &[u16]) -
         page_dir.map_page(vaddr, phys, true, true);
     }
 
-    let task = task::Task::new_user(
-        USER_CODE_BASE as u32,
-        USER_STACK_TOP as u32,
-        page_dir.phys_addr(),
-        is_driver,
-        allowed_ports,
-    );
+    let task = task::Task::new_user(USER_CODE_BASE as u32, USER_STACK_TOP as u32, page_dir.phys_addr(), allowed_ports);
     Some(crate::scheduler::spawn(task))
 }

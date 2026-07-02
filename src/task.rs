@@ -65,11 +65,6 @@ pub struct Task {
     /// all share the boot bootstrap directory (no isolation needed between
     /// them); ring-3 tasks get their own from `mm::paging::PageDirectory`.
     pub page_dir_phys: usize,
-    /// Gates the privileged syscalls (map_memory, register_for_interrupt)
-    /// and which ports `allowed_ports` actually grants -- set only by the
-    /// kernel's own internal spawn code (see Task::new_user), never by the
-    /// create_task syscall, which always spawns ordinary (false) tasks.
-    pub is_driver: bool,
     /// I/O ports this task may access directly from ring 3; installed into
     /// the TSS I/O bitmap by `gdt::set_io_permissions` whenever the
     /// scheduler switches to this task. Empty for ordinary tasks.
@@ -144,7 +139,6 @@ impl Task {
             state: TaskState::Ready,
             esp: sp,
             page_dir_phys: paging::boot_page_directory_phys(),
-            is_driver: false,
             allowed_ports: Vec::new(),
             cspace: CSpace::new(),
             stack,
@@ -157,17 +151,15 @@ impl Task {
     /// `new_kernel`, but `ret`s into `enter_ring3` (task_asm.s) instead,
     /// which loads user segments and `iret`s into ring 3.
     ///
-    /// `is_driver`/`allowed_ports` are only ever set by callers within the
-    /// kernel itself (main.rs's own spawn calls) -- the create_task
-    /// syscall always passes `false`/`&[]`, so untrusted code can never
-    /// grant itself or a child task hardware access.
-    pub fn new_user(
-        entry_eip: u32,
-        user_esp: u32,
-        page_dir_phys: usize,
-        is_driver: bool,
-        allowed_ports: &[u16],
-    ) -> Task {
+    /// `allowed_ports` is only ever set by callers within the kernel
+    /// itself (main.rs's own spawn calls) -- the create_task syscall
+    /// always passes `&[]`, so untrusted code can never grant itself or a
+    /// child task port access. Memory and IRQ access are gated separately,
+    /// through capabilities (see cap.rs) rather than a spawn-time flag --
+    /// holding a valid `MemoryGrant`/`IrqControl` capability is itself
+    /// sufficient authorization, the same way holding a port doesn't need
+    /// a second "and are you actually allowed to" check.
+    pub fn new_user(entry_eip: u32, user_esp: u32, page_dir_phys: usize, allowed_ports: &[u16]) -> Task {
         let (stack, stack_top) = new_stack();
 
         let mut sp = stack_top;
@@ -190,7 +182,6 @@ impl Task {
             state: TaskState::Ready,
             esp: sp,
             page_dir_phys,
-            is_driver,
             allowed_ports: allowed_ports.to_vec(),
             cspace: CSpace::new(),
             stack,

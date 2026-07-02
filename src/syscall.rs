@@ -25,6 +25,8 @@ const SYS_REGISTER_IRQ: u32 = 6;
 const SYS_MAP_MEMORY: u32 = 7;
 const SYS_CREATE_TASK: u32 = 8;
 const SYS_ENDPOINT_CREATE: u32 = 9;
+const SYS_CAP_MINT_BADGED: u32 = 10;
+const SYS_CAP_REVOKE: u32 = 11;
 
 /// Error sentinel returned in `eax` by the privileged syscalls
 /// (register_for_interrupt, map_memory) when the caller isn't
@@ -48,12 +50,21 @@ pub struct SavedRegs {
     pub ebp: u32,
 }
 
-/// Resolves a capability slot in the *current* task's own `CSpace`. Every
-/// syscall that takes a capability argument goes through this -- an
-/// unrecognized or empty slot just resolves to `None`, never panics, since
-/// the slot number comes straight from untrusted userspace.
-fn resolve_current_cap(slot: u32) -> Option<CapKind> {
-    cap::resolve(scheduler::current_cspace_get(slot)?)
+/// The capability node a slot in the *current* task's own `CSpace` refers
+/// to, if any -- the raw node id, for callers that need to derive from or
+/// revoke it rather than just use it (see `resolve_current_cap` for the
+/// common "just tell me what it is" case).
+fn current_cap_node(slot: u32) -> Option<cap::CapNodeId> {
+    scheduler::current_cspace_get(slot)
+}
+
+/// Resolves a capability slot in the *current* task's own `CSpace` to its
+/// kind and badge. Every syscall that takes a capability argument goes
+/// through this -- an unrecognized, empty, or revoked slot just resolves
+/// to `None`, never panics, since the slot number comes straight from
+/// untrusted userspace.
+fn resolve_current_cap(slot: u32) -> Option<(CapKind, u32)> {
+    cap::resolve(current_cap_node(slot)?)
 }
 
 #[no_mangle]
@@ -69,14 +80,31 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             regs.eax = 0;
         }
         SYS_SEND => match resolve_current_cap(regs.ebx) {
-            Some(CapKind::Endpoint { id }) => {
+            Some((CapKind::Endpoint { id }, _badge)) => {
                 let msg = [regs.ecx, regs.edx, regs.esi];
-                ipc::send(self_id, id, msg, regs as *mut SavedRegs);
+                // `edi` optionally names a capability (in the *caller's*
+                // CSpace) to hand to whoever receives this message. `0`
+                // (or anything that doesn't resolve/is revoked) just means
+                // "no transfer" -- an invalid transfer slot doesn't abort
+                // an otherwise-valid send, it only means the message
+                // arrives without one. The derived child is minted now,
+                // at send time, with the parent's own badge carried
+                // forward unchanged (a plain hand-off, not a re-badge --
+                // that's what SYS_CAP_MINT_BADGED is for, done locally
+                // before transferring the result).
+                let transfer = if regs.edi != 0 {
+                    current_cap_node(regs.edi)
+                        .and_then(|src| cap::resolve(src).map(|(_, badge)| (src, badge)))
+                        .and_then(|(src, badge)| cap::mint_derived(src, badge))
+                } else {
+                    None
+                };
+                ipc::send(self_id, id, msg, transfer, regs as *mut SavedRegs);
             }
             _ => regs.eax = ERR,
         },
         SYS_RECV => match resolve_current_cap(regs.ebx) {
-            Some(CapKind::Endpoint { id }) => ipc::recv(self_id, id, regs as *mut SavedRegs),
+            Some((CapKind::Endpoint { id }, _badge)) => ipc::recv(self_id, id, regs as *mut SavedRegs),
             _ => regs.eax = ERR,
         },
         SYS_GETPID => regs.eax = self_id as u32,
@@ -87,7 +115,7 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             // capability instead of "any driver can register for any irq".
             let irq_num = regs.ebx;
             regs.eax = match (scheduler::current_is_driver(), resolve_current_cap(regs.ecx)) {
-                (true, Some(CapKind::Endpoint { id })) if irq::register(irq_num, id) => 0,
+                (true, Some((CapKind::Endpoint { id }, _badge))) if irq::register(irq_num, id) => 0,
                 _ => ERR,
             };
         }
@@ -113,6 +141,27 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             let endpoint = ipc::create_endpoint(self_id);
             let node = cap::mint_root(CapKind::Endpoint { id: endpoint });
             regs.eax = scheduler::current_cspace_install(node);
+        }
+        SYS_CAP_MINT_BADGED => {
+            // `ebx`=source capability slot, `ecx`=badge for the new copy.
+            // Purely local -- installs the derived capability into the
+            // *caller's own* CSpace (to be handed to someone else via a
+            // send's transfer slot, if that's the point of re-badging it).
+            regs.eax = match current_cap_node(regs.ebx).and_then(|src| cap::mint_derived(src, regs.ecx)) {
+                Some(node) => scheduler::current_cspace_install(node),
+                None => ERR,
+            };
+        }
+        SYS_CAP_REVOKE => {
+            // `ebx`=capability slot to revoke. Revokes that capability and
+            // everything derived from it (see cap::revoke) -- an unknown
+            // or already-empty slot is simply a no-op, not an error, since
+            // the end state ("this slot doesn't grant anything") is the
+            // same either way.
+            if let Some(node) = current_cap_node(regs.ebx) {
+                cap::revoke(node);
+            }
+            regs.eax = 0;
         }
         _ => regs.eax = ERR,
     }

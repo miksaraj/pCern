@@ -8,8 +8,9 @@
 //! a capability by guessing, you can only use one the kernel actually gave
 //! you.
 //!
-//! Checkpoint E only mints root capabilities (no parent) and resolves
-//! them; derivation (transfer/badging) and revocation are Checkpoint F.
+//! Checkpoint F adds derivation (`mint_derived`, used for both transfer
+//! over `send` and explicit re-badging) and revocation on top of
+//! Checkpoint E's plain root-capability mint/resolve.
 
 use alloc::vec::Vec;
 
@@ -50,6 +51,16 @@ pub enum CapKind {
 
 struct CapNode {
     kind: CapKind,
+    /// Opaque value set at derivation time (see `mint_derived`), reported
+    /// alongside the resolved kind -- lets a single shared capability be
+    /// handed out in distinguishable copies (e.g. one server endpoint,
+    /// differently-badged per client). Not yet surfaced to userspace via
+    /// IPC (nothing in this phase's protocols needs a client to *see* its
+    /// own badge over the wire); it exists now so revocation and transfer
+    /// have real values to carry, ready for whenever a protocol does.
+    badge: u32,
+    children: Vec<CapNodeId>,
+    revoked: bool,
 }
 
 static CAP_NODES: Mutex<Vec<CapNode>> = Mutex::new(Vec::new());
@@ -62,14 +73,78 @@ static CAP_NODES: Mutex<Vec<CapNode>> = Mutex::new(Vec::new());
 pub fn mint_root(kind: CapKind) -> CapNodeId {
     let mut nodes = CAP_NODES.lock();
     let id = nodes.len() as CapNodeId;
-    nodes.push(CapNode { kind });
+    nodes.push(CapNode {
+        kind,
+        badge: 0,
+        children: Vec::new(),
+        revoked: false,
+    });
     id
 }
 
-/// Looks up what a capability node actually is. Returns `None` for an
-/// unknown id (there's no way to get one of those without going through
-/// `mint_root`/`CSpace`, but syscalls resolve untrusted slot numbers, so
-/// every caller must treat this as fallible).
-pub fn resolve(node: CapNodeId) -> Option<CapKind> {
-    CAP_NODES.lock().get(node as usize).map(|n| n.kind)
+/// Derives a child capability of the same kind from `parent`, tagged with
+/// `badge`. Returns `None` if `parent` doesn't exist or has already been
+/// revoked (a revoked capability can't be used to mint further children --
+/// otherwise revocation could always be defeated by deriving one more copy
+/// first). The new node's id still needs to be installed into some task's
+/// `CSpace` via `CSpace::install` to actually be reachable.
+pub fn mint_derived(parent: CapNodeId, badge: u32) -> Option<CapNodeId> {
+    let mut nodes = CAP_NODES.lock();
+    let kind = {
+        let entry = nodes.get(parent as usize)?;
+        if entry.revoked {
+            return None;
+        }
+        entry.kind
+    };
+    let id = nodes.len() as CapNodeId;
+    nodes.push(CapNode {
+        kind,
+        badge,
+        children: Vec::new(),
+        revoked: false,
+    });
+    nodes[parent as usize].children.push(id);
+    Some(id)
+}
+
+/// Looks up what a capability node actually is, and its badge. Returns
+/// `None` for an unknown or revoked id (there's no way to get an unknown
+/// one without going through `mint_root`/`mint_derived`, but syscalls
+/// resolve untrusted slot numbers, so every caller must treat this as
+/// fallible).
+pub fn resolve(node: CapNodeId) -> Option<(CapKind, u32)> {
+    let nodes = CAP_NODES.lock();
+    let entry = nodes.get(node as usize)?;
+    if entry.revoked {
+        None
+    } else {
+        Some((entry.kind, entry.badge))
+    }
+}
+
+/// Revokes `node` and every capability derived from it (transitively),
+/// marking them so `resolve`/`mint_derived` stop honoring them. Doesn't
+/// reach into any task's `CSpace` to remove the now-dead slot entries --
+/// a stale slot pointing at a revoked node just starts resolving to `None`
+/// (indistinguishable from an empty slot) the next time it's used, which
+/// is enough: nothing in this kernel ever iterates "everyone who might be
+/// holding capability X" the way a slot-nulling approach would need to.
+///
+/// Iterative (an explicit work-stack), not recursive -- a derivation chain
+/// is attacker-influenced-depth in principle (every `mint_derived` call
+/// adds one more link), and this must never blow the kernel stack.
+pub fn revoke(node: CapNodeId) {
+    let mut nodes = CAP_NODES.lock();
+    let mut stack = alloc::vec![node];
+    while let Some(id) = stack.pop() {
+        let Some(entry) = nodes.get_mut(id as usize) else {
+            continue;
+        };
+        if entry.revoked {
+            continue; // already processed -- also guards against any cycle
+        }
+        entry.revoked = true;
+        stack.extend(entry.children.iter().copied());
+    }
 }

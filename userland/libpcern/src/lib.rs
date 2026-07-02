@@ -8,9 +8,9 @@
 //! `ebx`/`ecx`/`edx`/`esi` carry up to four more arguments in; `send`/
 //! `recv` use `ebx` for a capability slot (not a raw task id -- see
 //! cap.rs's CSpace in the kernel) and `ecx`/`edx`/`esi` for a 3-word
-//! message. `edi` carries a capability slot to transfer on `send` and
-//! reports one that was transferred to you on `recv` (`0` = none either
-//! way; unused/always 0 until Checkpoint F actually implements transfer).
+//! message. `edi` carries a capability slot to transfer on `send` (`0` =
+//! none) and reports one that was transferred to you on `recv` (`0` =
+//! none).
 
 #![no_std]
 
@@ -31,6 +31,8 @@ pub const SYS_REGISTER_IRQ: u32 = 6;
 pub const SYS_MAP_MEMORY: u32 = 7;
 pub const SYS_CREATE_TASK: u32 = 8;
 pub const SYS_ENDPOINT_CREATE: u32 = 9;
+pub const SYS_CAP_MINT_BADGED: u32 = 10;
+pub const SYS_CAP_REVOKE: u32 = 11;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -71,8 +73,13 @@ pub fn yield_now() {
 /// Returns 0 on success. `dest_slot` is a capability slot (see cap.rs's
 /// CSpace in the kernel), not a raw task id -- the kernel checks it
 /// actually resolves to an Endpoint the caller holds before doing anything.
-pub fn send(dest_slot: u32, w0: u32, w1: u32, w2: u32) -> i32 {
-    unsafe { syscall_raw(SYS_SEND, dest_slot, w0, w1, w2, 0) }.eax as i32
+/// `transfer_slot` (`0` = none) optionally hands a capability from the
+/// caller's own CSpace to whoever receives this message (see cap.rs's
+/// mint_derived in the kernel) -- an invalid transfer slot doesn't fail
+/// the send, the message just arrives without one.
+#[allow(dead_code)]
+pub fn send(dest_slot: u32, w0: u32, w1: u32, w2: u32, transfer_slot: u32) -> i32 {
+    unsafe { syscall_raw(SYS_SEND, dest_slot, w0, w1, w2, transfer_slot) }.eax as i32
 }
 
 pub struct RecvResult {
@@ -80,6 +87,9 @@ pub struct RecvResult {
     pub w0: u32,
     pub w1: u32,
     pub w2: u32,
+    /// A capability slot in *this task's own* CSpace, freshly installed
+    /// because the sender named a transfer -- `0` if none did.
+    pub transferred_slot: u32,
 }
 
 /// `endpoint_slot`: a capability slot resolving to the Endpoint to wait
@@ -92,6 +102,7 @@ pub fn recv(endpoint_slot: u32) -> RecvResult {
         w0: r.ebx,
         w1: r.ecx,
         w2: r.edx,
+        transferred_slot: r.edi,
     }
 }
 
@@ -125,4 +136,21 @@ pub fn create_task(module_index: u32) -> u32 {
 #[allow(dead_code)]
 pub fn endpoint_create() -> u32 {
     unsafe { syscall_raw(SYS_ENDPOINT_CREATE, 0, 0, 0, 0, 0) }.eax
+}
+
+/// Derives a badged copy of the capability in `source_slot`, installed
+/// into the *caller's own* CSpace (typically so it can then be handed to
+/// someone else via `send`'s transfer slot). Returns the new slot, or `0`
+/// if `source_slot` didn't resolve to anything (or was already revoked).
+#[allow(dead_code)]
+pub fn cap_mint_badged(source_slot: u32, badge: u32) -> u32 {
+    unsafe { syscall_raw(SYS_CAP_MINT_BADGED, source_slot, badge, 0, 0, 0) }.eax
+}
+
+/// Revokes the capability in `slot` and everything derived from it --
+/// after this, every copy (in any task's CSpace) stops working. A no-op
+/// (not an error) if `slot` was already empty or invalid.
+#[allow(dead_code)]
+pub fn cap_revoke(slot: u32) {
+    unsafe { syscall_raw(SYS_CAP_REVOKE, slot, 0, 0, 0, 0) };
 }

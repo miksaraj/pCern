@@ -13,6 +13,12 @@ CONSOLE_SERVER_TARGET := i686-pcern-user
 CONSOLE_SERVER_ELF := $(CONSOLE_SERVER_DIR)/target/$(CONSOLE_SERVER_TARGET)/$(PROFILE)/console_server
 CONSOLE_SERVER_BIN := $(USERLAND_DIR)/console_server.bin
 
+# Checkpoint F test fixture (see userland/cap_test) -- not part of the
+# default `iso`/`userland` build, same as driver_test.asm/irq_test.asm;
+# built on demand via `make cap_test` for temporary verification only.
+CAP_TEST_DIR := $(USERLAND_DIR)/cap_test
+CAP_TEST_TARGET := i686-pcern-user
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -45,6 +51,14 @@ $(CONSOLE_SERVER_BIN): FORCE
 .PHONY: FORCE
 FORCE:
 
+.PHONY: cap_test
+cap_test:
+	cd $(CAP_TEST_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/task_a $(USERLAND_DIR)/cap_test_a.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/task_b $(USERLAND_DIR)/cap_test_b.bin
+
 .PHONY: iso
 iso: kernel userland
 	$(MKDIR) $(GRUB_PATH)
@@ -63,4 +77,5 @@ run: iso
 clean:
 	$(CARGO) clean
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) clean
+	cd $(CAP_TEST_DIR) && $(CARGO) clean
 	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin

@@ -17,7 +17,7 @@
 
 use alloc::vec::Vec;
 
-use crate::cap::EndpointId;
+use crate::cap::{CapNodeId, EndpointId};
 use crate::scheduler;
 use crate::sync::Mutex;
 use crate::syscall::SavedRegs;
@@ -48,6 +48,11 @@ struct PendingSend {
     task_id: TaskId,
     endpoint: EndpointId,
     msg: [u32; 3],
+    /// A capability (already derived from whatever the sender named, at
+    /// send-call time -- see syscall.rs's SYS_SEND) waiting to be
+    /// installed into whichever task's `CSpace` ends up receiving this
+    /// message. `None` if this send didn't request a transfer.
+    transfer: Option<CapNodeId>,
     regs: *mut SavedRegs,
 }
 
@@ -86,20 +91,27 @@ pub fn create_endpoint(owner: TaskId) -> EndpointId {
     id
 }
 
-/// Delivers `msg` to `endpoint`: immediately if some task is already
-/// blocked in a matching `recv` on it, otherwise blocks the caller until
-/// one arrives.
-pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], regs: *mut SavedRegs) {
+/// Delivers `msg` to `endpoint`, optionally handing over `transfer` (a
+/// capability already derived from whatever the caller named -- see
+/// syscall.rs's SYS_SEND) to whoever receives it: immediately if some task
+/// is already blocked in a matching `recv` on it, otherwise blocks the
+/// caller until one arrives.
+pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], transfer: Option<CapNodeId>, regs: *mut SavedRegs) {
     {
         let mut recvs = PENDING_RECVS.lock();
         if let Some(pos) = recvs.iter().position(|r| r.endpoint == endpoint) {
             let matched = recvs.remove(pos);
             drop(recvs);
+            // The receiver isn't the currently running task, so a
+            // transferred capability has to be installed into *its*
+            // CSpace explicitly rather than the current one's.
+            let installed_slot = transfer.map(|node| scheduler::install_cap_for(matched.task_id, node)).unwrap_or(0);
             unsafe {
                 (*matched.regs).eax = self_id as u32;
                 (*matched.regs).ebx = msg[0];
                 (*matched.regs).ecx = msg[1];
                 (*matched.regs).edx = msg[2];
+                (*matched.regs).edi = installed_slot;
                 (*regs).eax = 0;
             }
             scheduler::wake(matched.task_id);
@@ -111,6 +123,7 @@ pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], regs: *mut Sav
         task_id: self_id,
         endpoint,
         msg,
+        transfer,
         regs,
     });
     scheduler::block_current();
@@ -128,11 +141,17 @@ pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
         if let Some(pos) = sends.iter().position(|s| s.endpoint == endpoint) {
             let matched = sends.remove(pos);
             drop(sends);
+            // Here, unlike in send's matching branch above, the receiver
+            // *is* the currently running task (recv is what just found
+            // this match), so a transferred capability lands directly in
+            // its own CSpace.
+            let installed_slot = matched.transfer.map(scheduler::current_cspace_install).unwrap_or(0);
             unsafe {
                 (*regs).eax = matched.task_id as u32;
                 (*regs).ebx = matched.msg[0];
                 (*regs).ecx = matched.msg[1];
                 (*regs).edx = matched.msg[2];
+                (*regs).edi = installed_slot;
                 (*matched.regs).eax = 0;
             }
             scheduler::wake(matched.task_id);

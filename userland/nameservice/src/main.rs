@@ -10,9 +10,8 @@
 //! kernel-attested task ids to the names they're allowed to claim, rather
 //! than a dedicated capability kind + introspection syscall just to make
 //! that one policy check possible -- main.rs's spawn order already fixes
-//! which task id each trusted service gets, the same way ping.asm/
-//! pong.asm already hardcode task ids/slots for each other today. Lookups
-//! are open to any caller.
+//! which task id each trusted service gets. Lookups are open to any
+//! caller.
 
 #![no_std]
 #![no_main]
@@ -29,9 +28,9 @@ const MAX_ENTRIES: usize = 8;
 
 /// (kernel-attested task id, name) pairs allowed to register that name.
 /// Task ids are fixed by main.rs's spawn order: 1 = nameservice itself,
-/// 2 = console_server, 7 = storage_ata, 8 = fs_fat32 (task_a/task_b/
-/// ping/pong take 3-6 in between; see main.rs).
-const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (7, *b"storage\0"), (8, *b"fs\0\0\0\0\0\0")];
+/// 2 = console_server, 5 = storage_ata, 6 = fs_fat32 (task_a/task_b take
+/// 3-4 in between; see main.rs).
+const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (5, *b"storage\0"), (6, *b"fs\0\0\0\0\0\0")];
 
 #[derive(Clone, Copy)]
 struct Entry {

@@ -6,7 +6,6 @@ KERNEL_BIN := target/$(TARGET)/$(PROFILE)/pcern
 NASM := nasm
 OBJCOPY := objcopy
 USERLAND_DIR := userland
-USERLAND_BINS := $(USERLAND_DIR)/ping.bin $(USERLAND_DIR)/pong.bin
 
 CONSOLE_SERVER_DIR := $(USERLAND_DIR)/console_server
 CONSOLE_SERVER_TARGET := i686-pcern-user
@@ -65,8 +64,11 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
+userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
 
+# Kept for the older standalone .asm test fixtures (driver_test.asm,
+# irq_test.asm, etc.), built on demand by hand -- not part of any
+# .PHONY target.
 $(USERLAND_DIR)/%.bin: $(USERLAND_DIR)/%.asm
 	$(NASM) -f bin $< -o $@
 
@@ -109,8 +111,6 @@ cap_test:
 iso: kernel userland
 	$(MKDIR) $(GRUB_PATH)
 	$(CP) $(KERNEL_BIN) $(BOOT_PATH)/pcern.elf
-	$(CP) $(USERLAND_DIR)/ping.bin $(BOOT_PATH)/ping.bin
-	$(CP) $(USERLAND_DIR)/pong.bin $(BOOT_PATH)/pong.bin
 	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
 	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
 	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin

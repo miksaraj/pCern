@@ -15,8 +15,8 @@
 //!
 //! Checkpoint H: registers itself as "console" with the name service
 //! (CSlot 1, auto-granted to every task -- see loader.rs in the kernel)
-//! so ping.asm/pong.asm (and any future client) can find it by name
-//! instead of main.rs pre-wiring a capability to it by hand.
+//! so any client can find it by name instead of main.rs pre-wiring a
+//! capability to it by hand.
 
 #![no_std]
 #![no_main]

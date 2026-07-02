@@ -143,22 +143,6 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    let ping_id = loader::spawn_from_module(2, &[]).expect("no multiboot module 2 found for 'ping'");
-    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'ping' (id={})", ping_id);
-    let ping_endpoint = ipc::create_endpoint(ping_id);
-    grant_endpoint_cap(ping_id, ping_endpoint); // ping's CSlot 2: its own inbox
-
-    let pong_id = loader::spawn_from_module(3, &[]).expect("no multiboot module 3 found for 'pong'");
-    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'pong' (id={})", pong_id);
-    let pong_endpoint = ipc::create_endpoint(pong_id);
-    grant_endpoint_cap(pong_id, pong_endpoint); // pong's CSlot 2: its own inbox
-
-    grant_endpoint_cap(ping_id, pong_endpoint); // ping's CSlot 3: send to pong
-    grant_endpoint_cap(pong_id, ping_endpoint); // pong's CSlot 3: send to ping
-    // No pre-wired console capability for ping/pong anymore -- they look
-    // up "console" through the name service themselves (see ping.asm/
-    // pong.asm), the first real (non-main.rs-hardcoded) use of it.
-
     // Checkpoint I: the ATA/IDE storage driver. Port access is still
     // hand-wired here the same way console_server's is (there's no
     // capability for I/O ports, just the pre-existing allowed_ports/TSS
@@ -167,7 +151,7 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // other task.
     const STORAGE_ATA_PORTS: [u16; 9] = [0x1F0, 0x1F1, 0x1F2, 0x1F3, 0x1F4, 0x1F5, 0x1F6, 0x1F7, 0x3F6];
     let storage_id =
-        loader::spawn_from_module(4, &STORAGE_ATA_PORTS).expect("no multiboot module 4 found for 'storage_ata'");
+        loader::spawn_from_module(2, &STORAGE_ATA_PORTS).expect("no multiboot module 2 found for 'storage_ata'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'storage_ata' (id={})", storage_id);
     let storage_endpoint = ipc::create_endpoint(storage_id);
     grant_endpoint_cap(storage_id, storage_endpoint); // storage_ata's CSlot 2: its own inbox
@@ -175,15 +159,14 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // Checkpoint J: the FAT32 filesystem server. No hardware ports of its
     // own -- it's purely an IPC client of storage_ata and (via the name
     // service) a server to whatever looks up "fs".
-    let fs_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'fs_fat32'");
+    let fs_id = loader::spawn_from_module(3, &[]).expect("no multiboot module 3 found for 'fs_fat32'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'fs_fat32' (id={})", fs_id);
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
-    // Spawned last so it doesn't shift ping's/pong's task ids. Never blocks
-    // or exits, so block_current()/exit_current() always have at least one
-    // task to fall back to instead of panicking when every "real" task is
-    // blocked/exited.
+    // Spawned last. Never blocks or exits, so block_current()/exit_current()
+    // always have at least one task to fall back to instead of panicking
+    // when every "real" task is blocked/exited.
     scheduler::spawn_kernel_task(idle_task);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned idle task");
     println!("[ \x1b[1;32mok\x1b[0m ] handing off to the scheduler");

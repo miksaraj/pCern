@@ -15,7 +15,9 @@ mod exceptions;
 mod gdt;
 mod idt;
 mod ipc;
+mod irq;
 mod keyboard;
+mod loader;
 mod mm;
 mod multiboot;
 mod pic;
@@ -27,14 +29,6 @@ mod syscall;
 mod task;
 mod timer;
 mod vga;
-
-/// Where each ring-3 test program (loaded as a multiboot module) gets
-/// mapped, and where its stack lives. Arbitrary but page-aligned and clear
-/// of the kernel's own 0xC0000000+ range; every module gets its own fresh
-/// address space, so reusing the same virtual layout for each is fine.
-const USER_CODE_BASE: usize = 0x0040_0000;
-const USER_STACK_TOP: usize = 0x0080_0000;
-const USER_STACK_PAGES: usize = 4;
 
 const MULTIBOOT_MAGIC: u32 = 0x2BADB002;
 
@@ -92,30 +86,33 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     mm::paging::init(total_memory);
     frame_and_paging_smoke_test();
 
-    // Reserve every module's physical range up front, before allocating any
-    // task stacks/page tables: modules are only 1 page apart in memory, so
-    // allocating frames for one task while a not-yet-processed module's
-    // bytes are still unreserved risks handing out (and clobbering) exactly
-    // the frame the next module's own code is sitting in.
-    for i in 0..mb_info.module_count() {
-        if let Some(m) = mb_info.module(i) {
-            mm::frame::reserve_range(m.start, m.end);
-        }
-    }
+    loader::init(mb_info);
+    loader::reserve_all_modules();
     println!("[ \x1b[1;32mok\x1b[0m ] frame allocator + physical memory map online");
 
     unsafe { core::arch::asm!("sti") };
     println!("[ \x1b[1;32mok\x1b[0m ] interrupts enabled");
 
+    // Spawned first so it always gets task id 1 (id 0 is the reserved
+    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs): driver-flagged, with
+    // port access to the keyboard controller and CRTC, since it owns both
+    // the keyboard and VGA/ANSI console now (Checkpoint D). ping.asm/
+    // pong.asm hardcode this id (CONSOLE_TASK_ID) to reach it.
+    const CONSOLE_SERVER_PORTS: [u16; 4] = [0x60, 0x64, 0x3D4, 0x3D5];
+    match loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS) {
+        Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", id),
+        None => println!("[ \x1b[1;33mwarn\x1b[0m ] no multiboot module 0 found, skipping 'console_server'"),
+    }
+
     scheduler::spawn_kernel_task(task_a);
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    // Spawn order matters: ping.asm hardcodes pong's task id (4), which
-    // depends on task_a/task_b (1, 2) and ping itself (3) being spawned
-    // first in exactly this order -- see userland/ping.asm.
-    for (index, name) in [(0, "ping"), (1, "pong")] {
-        match spawn_ring3_task_from_module(&mb_info, index) {
+    // Spawn order matters: ping.asm hardcodes pong's task id (5), which
+    // depends on console_server (1), task_a/task_b (2, 3), and ping itself
+    // (4) being spawned first in exactly this order -- see userland/ping.asm.
+    for (index, name) in [(1, "ping"), (2, "pong")] {
+        match loader::spawn_from_module(index, false, &[]) {
             Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task '{}' (id={})", name, id),
             None => println!(
                 "[ \x1b[1;33mwarn\x1b[0m ] no multiboot module {} found, skipping '{}'",
@@ -140,45 +137,6 @@ extern "C" fn idle_task() -> ! {
     loop {
         unsafe { core::arch::asm!("hlt") };
     }
-}
-
-/// Loads multiboot module `index` (see grub.cfg) as a flat, position-
-/// dependent ring-3 program: maps it at `USER_CODE_BASE` in a fresh address
-/// space, gives it a small stack, and spawns it. Returns `None` if GRUB
-/// didn't hand us that many modules. Assumes every module's physical range
-/// has already been reserved (see kernel_main) -- otherwise allocating
-/// frames here risks clobbering a module this kernel hasn't loaded yet.
-fn spawn_ring3_task_from_module(mb_info: &multiboot::MultibootInfo, index: usize) -> Option<task::TaskId> {
-    let module = mb_info.module(index)?;
-
-    let mut page_dir = mm::paging::PageDirectory::new();
-
-    let module_len = module.end - module.start;
-    let code_pages = module_len.div_ceil(mm::frame::FRAME_SIZE).max(1);
-    for i in 0..code_pages {
-        let phys = mm::frame::alloc_frame().expect("out of memory mapping user code");
-        page_dir.map_page(USER_CODE_BASE + i * mm::frame::FRAME_SIZE, phys, true, true);
-
-        let dst = mm::paging::phys_to_virt(phys) as *mut u8;
-        let page_offset = i * mm::frame::FRAME_SIZE;
-        let copy_len = module_len.saturating_sub(page_offset).min(mm::frame::FRAME_SIZE);
-        unsafe {
-            core::ptr::write_bytes(dst, 0, mm::frame::FRAME_SIZE);
-            if copy_len > 0 {
-                let src = mm::paging::phys_to_virt(module.start + page_offset) as *const u8;
-                core::ptr::copy_nonoverlapping(src, dst, copy_len);
-            }
-        }
-    }
-
-    for i in 0..USER_STACK_PAGES {
-        let phys = mm::frame::alloc_frame().expect("out of memory mapping user stack");
-        let vaddr = USER_STACK_TOP - (i + 1) * mm::frame::FRAME_SIZE;
-        page_dir.map_page(vaddr, phys, true, true);
-    }
-
-    let task = task::Task::new_user(USER_CODE_BASE as u32, USER_STACK_TOP as u32, page_dir.phys_addr());
-    Some(scheduler::spawn(task))
 }
 
 extern "C" fn task_a() -> ! {

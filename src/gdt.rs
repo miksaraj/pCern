@@ -38,11 +38,21 @@ struct GdtPointer {
     base: u32,
 }
 
-/// A 32-bit TSS. This kernel never uses hardware task-switching -- the only
-/// fields that matter are `ss0`/`esp0`, which the CPU consults automatically
-/// on any ring3->ring0 transition (interrupt/exception/syscall) to find the
-/// kernel stack to switch to. `set_kernel_stack` updates `esp0` on every
-/// task switch to point at whichever task is about to run.
+/// Ports 0..IO_BITMAP_PORTS get real per-port entries in the TSS I/O
+/// bitmap; ports at or past this fall outside the bitmap's backed region,
+/// which the CPU treats as "1" (blocked) automatically -- the standard
+/// technique for keeping the bitmap far smaller than the architectural
+/// max of 8192 bytes (all 65536 ports) when only a handful of low legacy
+/// ports (keyboard, VGA CRTC) ever need to be reachable from ring 3.
+const IO_BITMAP_PORTS: usize = 1024;
+const IO_BITMAP_BYTES: usize = IO_BITMAP_PORTS / 8 + 1; // +1 trailing all-1s byte
+
+/// A 32-bit TSS. This kernel never uses hardware task-switching -- the
+/// fields that matter are `ss0`/`esp0` (which the CPU consults on any
+/// ring3->ring0 transition to find the kernel stack to switch to,
+/// refreshed every task switch by `set_kernel_stack`) and `io_bitmap`
+/// (refreshed every switch by `set_io_permissions`, gating which ports a
+/// ring-3 task can `in`/`out` directly without a #GP).
 #[repr(C, packed)]
 struct Tss {
     prev_task: u32,
@@ -72,10 +82,14 @@ struct Tss {
     ldt: u32,
     trap: u16,
     iomap_base: u16,
+    io_bitmap: [u8; IO_BITMAP_BYTES],
 }
 
 impl Tss {
-    const fn zero() -> Self {
+    /// Every port denied by default (`io_bitmap` all 1s) -- ordinary tasks
+    /// never get anything else, and driver tasks only get specific bits
+    /// cleared via `set_io_permissions` when they're the one running.
+    const fn initial() -> Self {
         Tss {
             prev_task: 0,
             esp0: 0,
@@ -104,6 +118,7 @@ impl Tss {
             ldt: 0,
             trap: 0,
             iomap_base: 0,
+            io_bitmap: [0xFF; IO_BITMAP_BYTES],
         }
     }
 }
@@ -140,7 +155,7 @@ static mut GDT: [GdtEntry; GDT_ENTRIES] = [
     GdtEntry::new(0, 0, 0, 0), // TSS descriptor, filled in at init() (base = runtime address)
 ];
 
-static mut TSS: Tss = Tss::zero();
+static mut TSS: Tss = Tss::initial();
 
 extern "C" {
     /// The boot stack set up in boot.s, still valid for as long as the
@@ -161,7 +176,10 @@ pub fn init() {
         // of failing in a diagnosable way. Not reachable today (no ring-3
         // code runs before scheduler::start()), but costs nothing to guard.
         TSS.esp0 = core::ptr::addr_of!(stack_top) as u32;
-        TSS.iomap_base = size_of::<Tss>() as u16; // past the limit: no I/O bitmap
+        // Always points at io_bitmap (which starts all-1s/blocked, see
+        // Tss::initial): the bitmap itself, not this offset, is what
+        // set_io_permissions toggles per task.
+        TSS.iomap_base = core::mem::offset_of!(Tss, io_bitmap) as u16;
     }
 
     let ptr = GdtPointer {
@@ -179,4 +197,25 @@ pub fn init() {
 /// Called by the scheduler on every task switch.
 pub fn set_kernel_stack(esp0: u32) {
     unsafe { TSS.esp0 = esp0 };
+}
+
+/// Rebuilds the I/O permission bitmap to allow exactly `ports` (each must
+/// be < IO_BITMAP_PORTS to take effect) and deny everything else. Called
+/// by the scheduler on every task switch with the incoming task's
+/// `allowed_ports` -- empty for ordinary tasks, which correctly just
+/// resets to "everything denied".
+pub fn set_io_permissions(ports: &[u16]) {
+    unsafe {
+        let bitmap = core::ptr::addr_of_mut!(TSS.io_bitmap) as *mut u8;
+        for i in 0..IO_BITMAP_BYTES {
+            bitmap.add(i).write(0xFF);
+        }
+        for &port in ports {
+            let port = port as usize;
+            if port < IO_BITMAP_PORTS {
+                let byte = bitmap.add(port / 8);
+                byte.write(byte.read() & !(1 << (port % 8)));
+            }
+        }
+    }
 }

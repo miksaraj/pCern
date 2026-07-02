@@ -36,6 +36,7 @@ pub struct Module {
     pub end: usize,
 }
 
+#[derive(Clone, Copy)]
 pub struct MultibootInfo {
     raw: *const RawInfo,
 }

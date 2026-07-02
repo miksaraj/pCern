@@ -12,6 +12,7 @@ iso
 
 # Rust build artifacts
 /target
+userland/console_server/target
 
 # Assembled userland test binaries
 userland/*.bin

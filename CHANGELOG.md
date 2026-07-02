@@ -1,0 +1,100 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Userland services each have their own version and changelog under
+`userland/<name>/CHANGELOG.md`; this file covers the kernel and the project
+as a whole.
+
+## [Unreleased]
+
+## [0.2.0] - 2026-07-02
+
+Full rewrite of the original C stub into a Rust nanokernel with real
+privilege separation, a capability-based security model, and a small
+userspace ecosystem of drivers/services built on top of it.
+
+### Added
+
+- Higher-half boot with paging, a physical frame allocator, and a bump
+  kernel heap (`GlobalAlloc`).
+- Preemptive round-robin scheduler, ring-3 tasks, a TSS-based privilege
+  transition, and a syscall gate (`int 0x80`).
+- Rendezvous IPC (`send`/`recv`) and a multiboot-module task loader.
+- A capability table: per-task capability spaces (CSpaces), capability
+  derivation with badging, transfer over IPC, and revocation that cascades
+  to every capability derived from the revoked one. IPC addressing moved
+  from raw task IDs to capability slots; memory-mapped I/O and IRQ
+  registration became capability-mediated (`MemoryGrant`, `IrqControl`)
+  instead of a single `is_driver` flag and a hardcoded allowlist.
+- A name service (`userland/nameservice`) as the one piece of discovery
+  every task gets for free, replacing hand-wired capability grants for
+  everything except a task's initial hardware/name-service capabilities.
+- Userspace drivers/services: `console_server` (VGA/ANSI text console +
+  keyboard, moved out of the kernel), `storage_ata` (polling ATA/IDE PIO
+  driver serving block reads over a shared-memory grant), `fs_fat32`
+  (read-only FAT32 filesystem server on top of `storage_ata`).
+- `userland/libpcern`, a shared `no_std` syscall/protocol binding crate
+  used by every userland program above.
+- `userland/cap_test`, a set of regression fixtures covering capability
+  transfer/badging/revocation, shared-memory grants, and the
+  storage/filesystem protocols end to end.
+- An automated test harness (`make test`): a second kernel build
+  (`--features test_harness`) that spawns every `cap_test` fixture
+  alongside the normal service set, boots headlessly in QEMU against a
+  generated FAT32 test image, and checks every fixture's exit code and
+  that no unexpected interrupt vectors fired.
+- CI (GitHub Actions) running `make iso` and `make test` on every push/PR
+  against `main`.
+
+### Changed
+
+- `sys_debug_write` (a syscall that let any ring-3 task write arbitrary
+  kernel memory to serial) was retired once the console server could take
+  over all userspace output.
+- The kernel's own keyboard-echo path was retired once `console_server`
+  owned the keyboard.
+
+### Fixed
+
+- `switch_to` wasn't saving/restoring `EFLAGS` across a context switch.
+- `sys_debug_write` allowed an arbitrary kernel-memory read from ring 3
+  (fixed by retiring the syscall entirely, see above).
+- An unhandled exception on a ring-3 task would halt the entire kernel
+  instead of just that task.
+- `block_current`/`exit_current` could panic if they emptied the ready
+  queue.
+- `exit_current` didn't clean up a task's pending IPC entries, leaking
+  state on every task exit.
+- A `map_page` bug leaked the `PAGE_USER` bit across an unrelated shared
+  4 MiB region.
+- An alignment-padding sliver in the heap allocator could be smaller than
+  the smallest trackable free block, corrupting the free list.
+- `total_memory_bytes` silently returned `0` instead of failing loudly
+  when multiboot didn't report `FLAG_MEM`.
+- The TSS's `esp0` field started at `0`, a landmine for the first ring-3
+  to ring-0 transition.
+- `ping.asm`/`pong.asm` (an early IPC demo) silently completed only one
+  round-trip instead of five, since Phase 3, due to a clobbered register
+  across a `call` -- caught while adding stricter round-by-round
+  verification, moot once those demo programs were removed as redundant
+  with `cap_test`'s fixtures.
+
+### Removed
+
+- `ping.asm`/`pong.asm`, the original two-task IPC demo, once
+  `userland/cap_test`'s fixtures covered the same ground more thoroughly.
+- A handful of standalone `.asm` verification fixtures at the userland
+  root (`driver_test.asm`, `irq_test.asm`, `nondriver_test.asm`,
+  `ring3_test.asm`, `ring3_cli_test.asm`) left over from early checkpoints;
+  all of them exercised syscalls or mechanisms (`sys_debug_write`,
+  `is_driver`) retired long before this release.
+
+## [0.1.0] - 2023-01-31
+
+Initial "pikokernel" exercise: a minimal multiboot-compliant kernel written
+in C, booting to a hardcoded VGA text message under QEMU. Tagged
+pre-release; superseded entirely by the 0.2.0 Rust rewrite.

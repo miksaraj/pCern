@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not a tag -- tags are mutable and a
+      # compromised upstream action could move one to point at malicious
+      # code without this workflow file changing at all. Corresponds to
+      # actions/checkout v4.3.1.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install nightly toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86
+
+      - name: Build kernel + default userland (release ISO)
+        run: make iso
+
+      - name: Build cap_test fixtures
+        run: make cap_test
+
+      - name: Run the automated test suite
+        run: make test

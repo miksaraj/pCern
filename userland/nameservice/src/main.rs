@@ -28,9 +28,11 @@ const MY_INBOX: u32 = 1;
 const MAX_ENTRIES: usize = 8;
 
 /// (kernel-attested task id, name) pairs allowed to register that name.
-/// Checkpoints I/J add their own (storage_task_id, "storage") /
-/// (fs_task_id, "fs") entries here once those services exist.
-const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0")];
+/// Checkpoint J adds its own (fs_task_id, "fs") entry here once that
+/// service exists. Task ids are fixed by main.rs's spawn order: 1 =
+/// nameservice itself, 2 = console_server, 7 = storage_ata (task_a/
+/// task_b/ping/pong take 3-6 in between; see main.rs).
+const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (7, *b"storage\0")];
 
 #[derive(Clone, Copy)]
 struct Entry {

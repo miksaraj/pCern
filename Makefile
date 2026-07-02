@@ -24,6 +24,11 @@ NAMESERVICE_BIN := $(USERLAND_DIR)/nameservice.bin
 CAP_TEST_DIR := $(USERLAND_DIR)/cap_test
 CAP_TEST_TARGET := i686-pcern-user
 
+STORAGE_ATA_DIR := $(USERLAND_DIR)/storage_ata
+STORAGE_ATA_TARGET := i686-pcern-user
+STORAGE_ATA_ELF := $(STORAGE_ATA_DIR)/target/$(STORAGE_ATA_TARGET)/$(PROFILE)/storage_ata
+STORAGE_ATA_BIN := $(USERLAND_DIR)/storage_ata.bin
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -44,7 +49,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN)
+userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN)
 
 $(USERLAND_DIR)/%.bin: $(USERLAND_DIR)/%.asm
 	$(NASM) -f bin $< -o $@
@@ -56,6 +61,10 @@ $(CONSOLE_SERVER_BIN): FORCE
 $(NAMESERVICE_BIN): FORCE
 	cd $(NAMESERVICE_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(NAMESERVICE_ELF) $(NAMESERVICE_BIN)
+
+$(STORAGE_ATA_BIN): FORCE
+	cd $(STORAGE_ATA_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(STORAGE_ATA_ELF) $(STORAGE_ATA_BIN)
 
 .PHONY: FORCE
 FORCE:
@@ -71,6 +80,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/mem_test_a $(USERLAND_DIR)/mem_test_a.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/mem_test_b $(USERLAND_DIR)/mem_test_b.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/storage_client_test $(USERLAND_DIR)/storage_client_test.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -80,6 +91,7 @@ iso: kernel userland
 	$(CP) $(USERLAND_DIR)/pong.bin $(BOOT_PATH)/pong.bin
 	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
 	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -92,5 +104,6 @@ clean:
 	$(CARGO) clean
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) clean
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
+	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
 	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin

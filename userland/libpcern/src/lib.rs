@@ -53,6 +53,38 @@ pub const NAMESERVICE_SLOT: u32 = 1;
 pub const NS_OP_REGISTER: u32 = 1;
 pub const NS_OP_LOOKUP: u32 = 2;
 
+/// Storage-service wire protocol (see userland/storage_ata). A client
+/// connects once (`storage_connect`) -- handing over a shared page via
+/// `SYS_MEM_ALLOC`/transfer for the driver to read sectors into, and its
+/// own inbox as the reply-to address, since the 3-word/1-transfer budget
+/// of a single message can't carry both at once -- then issues any number
+/// of `STORAGE_OP_READ_BLOCK` requests against that connection. Only one
+/// client is supported at a time (see storage_ata's `main.rs`): fine for
+/// this phase, where `fs_fat32` is the only caller.
+pub const STORAGE_OP_SET_BUFFER: u32 = 1;
+pub const STORAGE_OP_SET_REPLY: u32 = 2;
+pub const STORAGE_OP_READ_BLOCK: u32 = 3;
+pub const STORAGE_SECTOR_SIZE: usize = 512;
+
+/// Establishes a connection to the storage service: hands it the shared
+/// page backing `buf_grant_slot` (already mapped locally by the caller,
+/// typically via `mem_alloc`) to read sectors into, and `my_inbox_slot` as
+/// where to send read replies. Must be called before `storage_read_block`.
+#[allow(dead_code)]
+pub fn storage_connect(storage_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
+    send(storage_slot, STORAGE_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(storage_slot, STORAGE_OP_SET_REPLY, 0, 0, my_inbox_slot);
+}
+
+/// Reads sector `lba` into the shared buffer previously established by
+/// `storage_connect`. Returns `true` on success; the bytes are visible at
+/// whatever local virtual address the caller mapped `buf_grant_slot` to.
+#[allow(dead_code)]
+pub fn storage_read_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bool {
+    send(storage_slot, STORAGE_OP_READ_BLOCK, lba, 0, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
 /// Packs up to 8 bytes of `name` into two little-endian u32 words,
 /// zero-padded if shorter (longer names are truncated to 8 bytes). Used
 /// by both sides of the name-service protocol so the encoding only lives

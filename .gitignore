@@ -15,6 +15,7 @@ iso
 userland/console_server/target
 userland/cap_test/target
 userland/nameservice/target
+userland/storage_ata/target
 
 # Assembled userland test binaries
 userland/*.bin

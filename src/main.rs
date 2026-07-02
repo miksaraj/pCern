@@ -159,6 +159,19 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // up "console" through the name service themselves (see ping.asm/
     // pong.asm), the first real (non-main.rs-hardcoded) use of it.
 
+    // Checkpoint I: the ATA/IDE storage driver. Port access is still
+    // hand-wired here the same way console_server's is (there's no
+    // capability for I/O ports, just the pre-existing allowed_ports/TSS
+    // bitmap mechanism) -- everything else it needs (its own inbox, the
+    // name service) comes from the same fixed CSlot convention as any
+    // other task.
+    const STORAGE_ATA_PORTS: [u16; 9] = [0x1F0, 0x1F1, 0x1F2, 0x1F3, 0x1F4, 0x1F5, 0x1F6, 0x1F7, 0x3F6];
+    let storage_id =
+        loader::spawn_from_module(4, &STORAGE_ATA_PORTS).expect("no multiboot module 4 found for 'storage_ata'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'storage_ata' (id={})", storage_id);
+    let storage_endpoint = ipc::create_endpoint(storage_id);
+    grant_endpoint_cap(storage_id, storage_endpoint); // storage_ata's CSlot 2: its own inbox
+
     // Spawned last so it doesn't shift ping's/pong's task ids. Never blocks
     // or exits, so block_current()/exit_current() always have at least one
     // task to fall back to instead of panicking when every "real" task is

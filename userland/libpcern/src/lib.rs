@@ -85,6 +85,80 @@ pub fn storage_read_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bo
     recv(my_inbox_slot).w0 == 1
 }
 
+/// Filesystem-service wire protocol (see userland/fs_fat32). Setup mirrors
+/// storage's (`fs_connect`, same SET_BUFFER/SET_REPLY two-message pattern
+/// for the same reason -- one transfer per message). Opening a file needs
+/// an 11-byte fixed-width 8.3 name (see `fat_pack_name`), one byte more
+/// than the 3-word/1-op budget can carry in a single message, so it's
+/// split across two ops the same way: `OPEN_NAME1` carries the first 8
+/// bytes, `OPEN_NAME2` carries the last 3 and triggers the actual lookup
+/// + reply (`w0`=found flag, `w1`=file size). Only one client and one
+/// open file at a time, same scope as storage_ata.
+pub const FS_OP_SET_BUFFER: u32 = 1;
+pub const FS_OP_SET_REPLY: u32 = 2;
+pub const FS_OP_OPEN_NAME1: u32 = 3;
+pub const FS_OP_OPEN_NAME2: u32 = 4;
+pub const FS_OP_READ: u32 = 5;
+
+/// Packs `name` (e.g. `b"HELLO.TXT"`) into FAT's fixed 11-byte 8.3 form:
+/// up to 8 bytes before the `.` uppercased and space-padded, then up to 3
+/// bytes after it likewise -- directly comparable against the raw 11
+/// name bytes of a FAT directory entry.
+pub fn fat_pack_name(name: &[u8]) -> [u8; 11] {
+    let mut out = [b' '; 11];
+    let dot = name.iter().position(|&b| b == b'.');
+    let (base, ext) = match dot {
+        Some(i) => (&name[..i], &name[i + 1..]),
+        None => (name, &[][..]),
+    };
+    let base_len = base.len().min(8);
+    for i in 0..base_len {
+        out[i] = base[i].to_ascii_uppercase();
+    }
+    let ext_len = ext.len().min(3);
+    for i in 0..ext_len {
+        out[8 + i] = ext[i].to_ascii_uppercase();
+    }
+    out
+}
+
+/// Establishes a connection to the filesystem service, same shape as
+/// `storage_connect`.
+#[allow(dead_code)]
+pub fn fs_connect(fs_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
+    send(fs_slot, FS_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(fs_slot, FS_OP_SET_REPLY, 0, 0, my_inbox_slot);
+}
+
+/// Opens `name` (e.g. `b"HELLO.TXT"`) as the filesystem service's one
+/// current file. Returns the file's size in bytes if found.
+#[allow(dead_code)]
+pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+    let packed = fat_pack_name(name);
+    let w1 = u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]);
+    let w2 = u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]);
+    send(fs_slot, FS_OP_OPEN_NAME1, w1, w2, 0);
+    let w1b = u32::from_le_bytes([packed[8], packed[9], packed[10], 0]);
+    send(fs_slot, FS_OP_OPEN_NAME2, w1b, 0, 0);
+    let r = recv(my_inbox_slot);
+    if r.w0 == 1 {
+        Some(r.w1)
+    } else {
+        None
+    }
+}
+
+/// Reads up to `len` bytes at `offset` from the currently open file into
+/// the shared buffer established by `fs_connect`. Returns the number of
+/// bytes actually placed there (`0` = EOF or no file open) -- may be less
+/// than `len`, same partial-read contract as `storage_read_block`'s
+/// sector-at-a-time behavior (a read never crosses a sector boundary).
+#[allow(dead_code)]
+pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
+    send(fs_slot, FS_OP_READ, offset, len, 0);
+    recv(my_inbox_slot).w0
+}
+
 /// Packs up to 8 bytes of `name` into two little-endian u32 words,
 /// zero-padded if shorter (longer names are truncated to 8 bytes). Used
 /// by both sides of the name-service protocol so the encoding only lives
@@ -124,6 +198,24 @@ pub fn lookup_name(name: &[u8], my_inbox_slot: u32) -> Option<u32> {
     } else {
         None
     }
+}
+
+/// Like `lookup_name`, but retries (yielding in between) up to
+/// `max_tries` times before giving up. A lookup is a synchronous,
+/// point-in-time check against whatever's registered *right now* --
+/// there's no queuing for "let me know when this shows up" -- so a
+/// client racing a service that needs its own setup time (several IPC
+/// round trips of its own, e.g. fs_fat32 connecting to storage_ata
+/// before it can register "fs") needs to retry rather than look up once.
+#[allow(dead_code)]
+pub fn lookup_name_retry(name: &[u8], my_inbox_slot: u32, max_tries: u32) -> Option<u32> {
+    for _ in 0..max_tries {
+        if let Some(slot) = lookup_name(name, my_inbox_slot) {
+            return Some(slot);
+        }
+        yield_now();
+    }
+    None
 }
 
 /// Every register the kernel's syscall ABI might write on return, captured

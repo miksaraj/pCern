@@ -29,6 +29,11 @@ STORAGE_ATA_TARGET := i686-pcern-user
 STORAGE_ATA_ELF := $(STORAGE_ATA_DIR)/target/$(STORAGE_ATA_TARGET)/$(PROFILE)/storage_ata
 STORAGE_ATA_BIN := $(USERLAND_DIR)/storage_ata.bin
 
+FS_FAT32_DIR := $(USERLAND_DIR)/fs_fat32
+FS_FAT32_TARGET := i686-pcern-user
+FS_FAT32_ELF := $(FS_FAT32_DIR)/target/$(FS_FAT32_TARGET)/$(PROFILE)/fs_fat32
+FS_FAT32_BIN := $(USERLAND_DIR)/fs_fat32.bin
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -49,7 +54,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN)
+userland: $(USERLAND_BINS) $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
 
 $(USERLAND_DIR)/%.bin: $(USERLAND_DIR)/%.asm
 	$(NASM) -f bin $< -o $@
@@ -65,6 +70,10 @@ $(NAMESERVICE_BIN): FORCE
 $(STORAGE_ATA_BIN): FORCE
 	cd $(STORAGE_ATA_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(STORAGE_ATA_ELF) $(STORAGE_ATA_BIN)
+
+$(FS_FAT32_BIN): FORCE
+	cd $(FS_FAT32_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(FS_FAT32_ELF) $(FS_FAT32_BIN)
 
 .PHONY: FORCE
 FORCE:
@@ -82,6 +91,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/mem_test_b $(USERLAND_DIR)/mem_test_b.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/storage_client_test $(USERLAND_DIR)/storage_client_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/fs_client_test $(USERLAND_DIR)/fs_client_test.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -92,6 +103,7 @@ iso: kernel userland
 	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
 	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
 	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_PATH)/fs_fat32.bin
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -105,5 +117,6 @@ clean:
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) clean
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
+	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
 	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin

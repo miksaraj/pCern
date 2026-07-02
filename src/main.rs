@@ -172,6 +172,14 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let storage_endpoint = ipc::create_endpoint(storage_id);
     grant_endpoint_cap(storage_id, storage_endpoint); // storage_ata's CSlot 2: its own inbox
 
+    // Checkpoint J: the FAT32 filesystem server. No hardware ports of its
+    // own -- it's purely an IPC client of storage_ata and (via the name
+    // service) a server to whatever looks up "fs".
+    let fs_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'fs_fat32'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'fs_fat32' (id={})", fs_id);
+    let fs_endpoint = ipc::create_endpoint(fs_id);
+    grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
+
     // Spawned last so it doesn't shift ping's/pong's task ids. Never blocks
     // or exits, so block_current()/exit_current() always have at least one
     // task to fall back to instead of panicking when every "real" task is

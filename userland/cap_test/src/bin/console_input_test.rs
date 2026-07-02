@@ -20,11 +20,10 @@
 //! sleeping a fixed amount (see CLAUDE.md's design notes on this
 //! checkpoint). This is a synchronization *gate*, not the pass/fail
 //! signal -- the exit code is still that, checked the same way as every
-//! other fixture. main.rs's keyboard_test build leaves out the two
-//! endless-print kernel tasks (task_a/task_b) specifically so their
-//! kernel-side `println!` (which also mirrors to serial) can never
-//! interleave, byte-for-byte, with this fixture's own raw writes to the
-//! same COM1 UART -- there's no shared lock between the two paths.
+//! other fixture. Nothing else in the keyboard_test build writes to
+//! serial from outside the kernel's own `println!`/serial module, so
+//! there's no byte-interleaving risk with this fixture's own raw COM1
+//! writes to worry about here.
 
 #![no_std]
 #![no_main]

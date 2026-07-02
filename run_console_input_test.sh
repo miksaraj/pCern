@@ -13,10 +13,8 @@
 # readiness marker is only a synchronization *gate* for when it's safe to
 # call `sendkey`, never the pass/fail signal itself.
 #
-# Task ids in this build (see main.rs's keyboard_test feature, which
-# skips the two endless-print kernel tasks -- see console_input_test.rs
-# for why): nameservice=1, console_server=2, storage_ata=3, fs_fat32=4,
-# console_input_test=5.
+# Task ids in this build: nameservice=1, console_server=2, storage_ata=3,
+# fs_fat32=4, console_input_test=5.
 
 set -uo pipefail
 

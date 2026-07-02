@@ -28,9 +28,8 @@ const MAX_ENTRIES: usize = 8;
 
 /// (kernel-attested task id, name) pairs allowed to register that name.
 /// Task ids are fixed by main.rs's spawn order: 1 = nameservice itself,
-/// 2 = console_server, 5 = storage_ata, 6 = fs_fat32 (task_a/task_b take
-/// 3-4 in between; see main.rs).
-const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (5, *b"storage\0"), (6, *b"fs\0\0\0\0\0\0")];
+/// 2 = console_server, 3 = storage_ata, 4 = fs_fat32.
+const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (3, *b"storage\0"), (4, *b"fs\0\0\0\0\0\0")];
 
 #[derive(Clone, Copy)]
 struct Entry {

@@ -53,6 +53,16 @@ The first interactive OS experience: type a command, something happens.
   do. Fixed to read through the physical-memory map instead, which is
   present in every address space regardless of which one is active.
 
+### Removed
+
+- The two endless-print kernel smoke-test tasks (`task_a`/`task_b`,
+  present since the earliest checkpoints) from every boot configuration,
+  including production -- their unthrottled console/serial spam has no
+  place in a build meant to actually be typed into. Removing them also
+  simplified every task-id-dependent build (`nameservice`'s registration
+  allowlist, `run_tests.sh`) down to one consistent numbering instead of
+  the production/test_harness builds needing +2 for their presence.
+
 ## [0.2.0] - 2026-07-02
 
 Full rewrite of the original C stub into a Rust nanokernel with real

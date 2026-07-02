@@ -139,20 +139,6 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let irq_slot = scheduler::install_cap_for(console_id, irq_control);
     debug_assert_eq!(irq_slot, 4, "console_server's IrqControl must land at CSlot 4");
 
-    // Skipped for the keyboard_test build specifically: these two tasks'
-    // println! calls mirror to serial with no lock shared with
-    // console_input_test's own raw COM1 writes (see that fixture's doc
-    // comment) -- byte-interleaving risk neither the production nor the
-    // regular test_harness build ever has to care about, since nothing
-    // else there writes to serial from outside the kernel's own
-    // println!/serial module.
-    #[cfg(not(feature = "keyboard_test"))]
-    {
-        scheduler::spawn_kernel_task(task_a);
-        scheduler::spawn_kernel_task(task_b);
-        println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
-    }
-
     // Checkpoint I: the ATA/IDE storage driver. Port access is still
     // hand-wired here the same way console_server's is (there's no
     // capability for I/O ports, just the pre-existing allowed_ports/TSS
@@ -221,7 +207,7 @@ fn grant_endpoint_cap(task_id: task::TaskId, endpoint: cap::EndpointId) -> cap::
 /// tasks, only present in a kernel built with `--features test_harness`
 /// (see `make test`) -- `grub-test.cfg` is the one grub config whose
 /// module list actually matches the indices below; production's
-/// `grub.cfg` only has modules 0-3. Each fixture gets the same CSlot 1 =
+/// `grub.cfg` only has modules 0-4. Each fixture gets the same CSlot 1 =
 /// name service / CSlot 2 = own inbox convention as every other task;
 /// the two paired fixtures (which need to reach a specific peer, not
 /// something discoverable by name) additionally get that peer's endpoint
@@ -309,26 +295,6 @@ fn keyboard_test_spawn() {
 extern "C" fn idle_task() -> ! {
     loop {
         unsafe { core::arch::asm!("hlt") };
-    }
-}
-
-#[cfg_attr(feature = "keyboard_test", allow(dead_code))]
-extern "C" fn task_a() -> ! {
-    let mut i: u32 = 0;
-    loop {
-        println!("\x1b[1;32m[task A]\x1b[0m iteration {}", i);
-        i += 1;
-        scheduler::yield_now();
-    }
-}
-
-#[cfg_attr(feature = "keyboard_test", allow(dead_code))]
-extern "C" fn task_b() -> ! {
-    let mut i: u32 = 0;
-    loop {
-        println!("\x1b[1;35m[task B]\x1b[0m iteration {}", i);
-        i += 1;
-        scheduler::yield_now();
     }
 }
 

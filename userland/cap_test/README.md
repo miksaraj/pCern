@@ -55,7 +55,7 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   ring-3 program (it just calls `exit(42)`), objcopy'd and dropped onto
   the test FAT32 image as `LOADED.BIN` by `make test-fat32-image`.
   `fs_client_test` reads its bytes via the real filesystem protocol and
-  spawns it with `SYS_SPAWN_FROM_MEMORY`; seeing task 13 exit with code
+  spawns it with `SYS_SPAWN_FROM_MEMORY`; seeing task 11 exit with code
   `42` specifically (not the `-1` a crashing/faulted task would exit
   with) in `run_tests.sh` is what actually proves the loaded code ran,
   not just that the syscall returned a task id.

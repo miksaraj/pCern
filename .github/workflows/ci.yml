@@ -12,7 +12,11 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a full commit SHA, not a tag -- tags are mutable and a
+      # compromised upstream action could move one to point at malicious
+      # code without this workflow file changing at all. Corresponds to
+      # actions/checkout v4.3.1.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install nightly toolchain (pinned by rust-toolchain.toml)
         run: rustup show

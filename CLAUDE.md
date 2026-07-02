@@ -134,6 +134,19 @@ capabilities, a fixed test-pairing's peer). If you're adding a new
 service, follow this convention rather than inventing a new one -- every
 existing service and test fixture assumes it.
 
+### CI: pin GitHub Actions to a commit SHA, never a tag
+
+Every `uses:` line in `.github/workflows/*.yml` pins a full 40-character
+commit SHA, not a version tag (`@v4`) or branch. Tags are mutable -- if an
+action's repository is ever compromised, a moved tag would pull malicious
+code into every workflow still pinned to it without the workflow file
+itself changing at all. A SHA pin doesn't move. Add a trailing comment
+noting which released version the SHA corresponds to (e.g.
+`# v4.3.1`) so it stays human-readable, but the SHA is what's actually
+trusted. Bumping an action's version means fetching the new tag's commit
+SHA from the action's own repository and updating both the SHA and the
+comment -- never just editing the version number.
+
 ## Where things live, and why one repo
 
 pCern is a monorepo: the kernel (`src/`) and every userland service

@@ -11,6 +11,7 @@ use core::panic::PanicInfo;
 global_asm!(include_str!("boot.s"));
 
 mod ansi;
+mod cap;
 mod exceptions;
 mod gdt;
 mod idt;
@@ -94,43 +95,150 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     println!("[ \x1b[1;32mok\x1b[0m ] interrupts enabled");
 
     // Spawned first so it always gets task id 1 (id 0 is the reserved
-    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs): driver-flagged, with
-    // port access to the keyboard controller and CRTC, since it owns both
-    // the keyboard and VGA/ANSI console now (Checkpoint D). ping.asm/
-    // pong.asm hardcode this id (CONSOLE_TASK_ID) to reach it.
+    // KERNEL_TASK_ID pseudo-sender -- see ipc.rs). Every task spawned after
+    // this automatically gets a capability to its endpoint installed at
+    // CSlot 1 (see loader::set_nameservice_endpoint/spawn_from_module) --
+    // the one piece of discovery infrastructure nothing has to be told
+    // about individually, the way every other capability below still is.
+    let nameservice_id = loader::spawn_from_module(0, &[]).expect("no multiboot module 0 found for 'nameservice'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'nameservice' (id={})", nameservice_id);
+    let nameservice_endpoint = ipc::create_endpoint(nameservice_id);
+    let nameservice_inbox_slot = grant_endpoint_cap(nameservice_id, nameservice_endpoint);
+    debug_assert_eq!(nameservice_inbox_slot, 1, "nameservice's own inbox must land at CSlot 1");
+    loader::set_nameservice_endpoint(nameservice_endpoint);
+
+    // Port access to the keyboard controller and CRTC, since console_server
+    // owns both the keyboard and VGA/ANSI console (Checkpoint D). There's
+    // still no *dynamic* discovery for capabilities beyond the name
+    // service itself, so main.rs wires the rest up here by hand, right
+    // after spawning -- this is trusted kernel code, so directly minting
+    // capabilities into another task's own CSpace (via
+    // scheduler::install_cap_for) is safe the same way allowed_ports
+    // already is. Fixed convention every userland program below relies on:
+    // CSlot 1 = name service (auto-granted), CSlot 2 = "my own inbox,"
+    // CSlot 3+ = whatever else that task specifically needs.
     const CONSOLE_SERVER_PORTS: [u16; 4] = [0x60, 0x64, 0x3D4, 0x3D5];
-    match loader::spawn_from_module(0, true, &CONSOLE_SERVER_PORTS) {
-        Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", id),
-        None => println!("[ \x1b[1;33mwarn\x1b[0m ] no multiboot module 0 found, skipping 'console_server'"),
-    }
+    let console_id =
+        loader::spawn_from_module(1, &CONSOLE_SERVER_PORTS).expect("no multiboot module 1 found for 'console_server'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", console_id);
+    let console_endpoint = ipc::create_endpoint(console_id);
+    let console_inbox_slot = grant_endpoint_cap(console_id, console_endpoint);
+    debug_assert_eq!(console_inbox_slot, 2, "console_server's own inbox must land at CSlot 2");
+
+    const VGA_BUFFER_PHYS: usize = 0xB8000;
+    const VGA_BUFFER_LEN: usize = 0x1000;
+    let vga_grant = cap::mint_root(cap::CapKind::MemoryGrant {
+        phys_base: VGA_BUFFER_PHYS,
+        len: VGA_BUFFER_LEN,
+        writable: true,
+    });
+    let vga_slot = scheduler::install_cap_for(console_id, vga_grant);
+    debug_assert_eq!(vga_slot, 3, "console_server's VGA grant must land at CSlot 3");
+
+    let irq_control = cap::mint_root(cap::CapKind::IrqControl { irq: 1, endpoint: console_endpoint });
+    let irq_slot = scheduler::install_cap_for(console_id, irq_control);
+    debug_assert_eq!(irq_slot, 4, "console_server's IrqControl must land at CSlot 4");
 
     scheduler::spawn_kernel_task(task_a);
     scheduler::spawn_kernel_task(task_b);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
 
-    // Spawn order matters: ping.asm hardcodes pong's task id (5), which
-    // depends on console_server (1), task_a/task_b (2, 3), and ping itself
-    // (4) being spawned first in exactly this order -- see userland/ping.asm.
-    for (index, name) in [(1, "ping"), (2, "pong")] {
-        match loader::spawn_from_module(index, false, &[]) {
-            Some(id) => println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task '{}' (id={})", name, id),
-            None => println!(
-                "[ \x1b[1;33mwarn\x1b[0m ] no multiboot module {} found, skipping '{}'",
-                index, name
-            ),
-        }
-    }
+    // Checkpoint I: the ATA/IDE storage driver. Port access is still
+    // hand-wired here the same way console_server's is (there's no
+    // capability for I/O ports, just the pre-existing allowed_ports/TSS
+    // bitmap mechanism) -- everything else it needs (its own inbox, the
+    // name service) comes from the same fixed CSlot convention as any
+    // other task.
+    const STORAGE_ATA_PORTS: [u16; 9] = [0x1F0, 0x1F1, 0x1F2, 0x1F3, 0x1F4, 0x1F5, 0x1F6, 0x1F7, 0x3F6];
+    let storage_id =
+        loader::spawn_from_module(2, &STORAGE_ATA_PORTS).expect("no multiboot module 2 found for 'storage_ata'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'storage_ata' (id={})", storage_id);
+    let storage_endpoint = ipc::create_endpoint(storage_id);
+    grant_endpoint_cap(storage_id, storage_endpoint); // storage_ata's CSlot 2: its own inbox
 
-    // Spawned last so it doesn't shift ping's hardcoded PONG_TASK_ID. Never
-    // blocks or exits, so block_current()/exit_current() always have at
-    // least one task to fall back to instead of panicking when every "real"
-    // task is blocked/exited.
+    // Checkpoint J: the FAT32 filesystem server. No hardware ports of its
+    // own -- it's purely an IPC client of storage_ata and (via the name
+    // service) a server to whatever looks up "fs".
+    let fs_id = loader::spawn_from_module(3, &[]).expect("no multiboot module 3 found for 'fs_fat32'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'fs_fat32' (id={})", fs_id);
+    let fs_endpoint = ipc::create_endpoint(fs_id);
+    grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
+
+    #[cfg(feature = "test_harness")]
+    test_harness_spawn();
+
+    // Spawned last. Never blocks or exits, so block_current()/exit_current()
+    // always have at least one task to fall back to instead of panicking
+    // when every "real" task is blocked/exited.
     scheduler::spawn_kernel_task(idle_task);
     println!("[ \x1b[1;32mok\x1b[0m ] spawned idle task");
     println!("[ \x1b[1;32mok\x1b[0m ] handing off to the scheduler");
     println!();
 
     scheduler::start();
+}
+
+/// Mints a fresh root capability for `endpoint` and installs it into
+/// `task_id`'s own CSpace, returning the slot it landed in. A thin wrapper
+/// around `cap::mint_root`+`scheduler::install_cap_for` just to keep the
+/// boot-time wiring above readable.
+fn grant_endpoint_cap(task_id: task::TaskId, endpoint: cap::EndpointId) -> cap::CSlot {
+    let node = cap::mint_root(cap::CapKind::Endpoint { id: endpoint });
+    scheduler::install_cap_for(task_id, node)
+}
+
+/// Spawns the cap_test fixtures (see `userland/cap_test`) as ring-3
+/// tasks, only present in a kernel built with `--features test_harness`
+/// (see `make test`) -- `grub-test.cfg` is the one grub config whose
+/// module list actually matches the indices below; production's
+/// `grub.cfg` only has modules 0-3. Each fixture gets the same CSlot 1 =
+/// name service / CSlot 2 = own inbox convention as every other task;
+/// the two paired fixtures (which need to reach a specific peer, not
+/// something discoverable by name) additionally get that peer's endpoint
+/// hand-wired at CSlot 3, exactly the way console_server's hardware
+/// capabilities are hand-wired above.
+#[cfg(feature = "test_harness")]
+fn test_harness_spawn() {
+    let cap_test_a_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'cap_test_a'");
+    let cap_test_a_endpoint = ipc::create_endpoint(cap_test_a_id);
+    grant_endpoint_cap(cap_test_a_id, cap_test_a_endpoint); // its CSlot 2: its own inbox
+
+    let cap_test_b_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'cap_test_b'");
+    let cap_test_b_endpoint = ipc::create_endpoint(cap_test_b_id);
+    grant_endpoint_cap(cap_test_b_id, cap_test_b_endpoint); // its CSlot 2: its own inbox
+
+    grant_endpoint_cap(cap_test_a_id, cap_test_b_endpoint); // cap_test_a's CSlot 3: send to cap_test_b
+    grant_endpoint_cap(cap_test_b_id, cap_test_a_endpoint); // cap_test_b's CSlot 3: send to cap_test_a
+
+    let mem_test_a_id = loader::spawn_from_module(6, &[]).expect("no multiboot module 6 found for 'mem_test_a'");
+    let mem_test_a_endpoint = ipc::create_endpoint(mem_test_a_id);
+    grant_endpoint_cap(mem_test_a_id, mem_test_a_endpoint); // its CSlot 2: its own inbox
+
+    let mem_test_b_id = loader::spawn_from_module(7, &[]).expect("no multiboot module 7 found for 'mem_test_b'");
+    let mem_test_b_endpoint = ipc::create_endpoint(mem_test_b_id);
+    grant_endpoint_cap(mem_test_b_id, mem_test_b_endpoint); // its CSlot 2: its own inbox
+
+    grant_endpoint_cap(mem_test_a_id, mem_test_b_endpoint); // mem_test_a's CSlot 3: send to mem_test_b
+    grant_endpoint_cap(mem_test_b_id, mem_test_a_endpoint); // mem_test_b's CSlot 3: send to mem_test_a
+
+    // storage_client_test isn't included here: storage_ata only supports
+    // one client at a time (a single reply_slot/buf_mapped pair, no
+    // per-client state -- see its own doc comment), and fs_fat32 is
+    // already permanently running as one. Running both concurrently
+    // would have them clobber each other's connection. fs_fat32's own
+    // client (fs_client_test, right below) already exercises storage_ata
+    // thoroughly at one remove; storage_client_test is still there for
+    // standalone verification (temporarily wired in with fs_fat32 absent,
+    // the way Checkpoint I originally used it).
+    let fs_client_test_id =
+        loader::spawn_from_module(8, &[]).expect("no multiboot module 8 found for 'fs_client_test'");
+    let fs_client_test_endpoint = ipc::create_endpoint(fs_client_test_id);
+    grant_endpoint_cap(fs_client_test_id, fs_client_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] test_harness: spawned cap_test fixtures (ids {}-{})",
+        cap_test_a_id, fs_client_test_id
+    );
 }
 
 extern "C" fn idle_task() -> ! {

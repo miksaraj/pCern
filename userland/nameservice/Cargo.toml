@@ -1,10 +1,10 @@
 [package]
-name = "console_server"
+name = "nameservice"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "console_server"
+name = "nameservice"
 path = "src/main.rs"
 
 [dependencies]

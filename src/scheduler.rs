@@ -1,6 +1,7 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use crate::cap::{CSlot, CapNodeId};
 use crate::gdt;
 use crate::ipc;
 use crate::mm::paging;
@@ -59,17 +60,6 @@ pub fn current_id() -> Option<TaskId> {
     SCHEDULER.lock().current
 }
 
-/// Whether the currently running task is kernel-flagged as a driver (see
-/// task.rs) -- gates the privileged syscalls (map_memory,
-/// register_for_interrupt) in syscall.rs.
-pub fn current_is_driver() -> bool {
-    let sched = SCHEDULER.lock();
-    match sched.current {
-        Some(id) => sched.tasks[sched.index_of(id)].is_driver,
-        None => false,
-    }
-}
-
 /// Physical address of the currently running task's own page directory --
 /// needed so a syscall (e.g. map_memory) can map more pages into that same
 /// still-active address space via `mm::paging::PageDirectory::from_phys`.
@@ -77,6 +67,35 @@ pub fn current_page_dir_phys() -> usize {
     let sched = SCHEDULER.lock();
     let id = sched.current.expect("syscall with no current task");
     sched.tasks[sched.index_of(id)].page_dir_phys
+}
+
+/// Installs `node` into the currently running task's own capability table
+/// and returns the slot it landed in -- used by syscalls that mint a new
+/// capability for the caller (e.g. `SYS_ENDPOINT_CREATE`).
+pub fn current_cspace_install(node: CapNodeId) -> CSlot {
+    let mut sched = SCHEDULER.lock();
+    let id = sched.current.expect("syscall with no current task");
+    let idx = sched.index_of(id);
+    sched.tasks[idx].cspace.install(node)
+}
+
+/// Resolves a capability slot in the currently running task's own table --
+/// used by syscalls that take a capability as an argument (e.g. `SYS_SEND`).
+pub fn current_cspace_get(slot: CSlot) -> Option<CapNodeId> {
+    let sched = SCHEDULER.lock();
+    let id = sched.current.expect("syscall with no current task");
+    sched.tasks[sched.index_of(id)].cspace.get(slot)
+}
+
+/// Installs `node` into an arbitrary (not necessarily current) task's
+/// capability table. Only meant for trusted kernel-side code doing initial
+/// capability wiring at boot (see main.rs) -- there's no syscall exposing
+/// this, since a task granting itself or others arbitrary capabilities
+/// would defeat the entire point of the capability system.
+pub fn install_cap_for(task_id: TaskId, node: CapNodeId) -> CSlot {
+    let mut sched = SCHEDULER.lock();
+    let idx = sched.index_of(task_id);
+    sched.tasks[idx].cspace.install(node)
 }
 
 /// Hands control to the scheduler: picks the first ready task and switches

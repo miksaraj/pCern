@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "console_server"
+name = "fs_fat32"
 version = "0.1.0"
 dependencies = [
  "libpcern",

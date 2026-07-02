@@ -1,11 +1,7 @@
 [package]
-name = "console_server"
+name = "cap_test"
 version = "0.1.0"
 edition = "2021"
-
-[[bin]]
-name = "console_server"
-path = "src/main.rs"
 
 [dependencies]
 libpcern = { path = "../libpcern" }

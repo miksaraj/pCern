@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "console_server"
+name = "libpcern"
+version = "0.1.0"
+
+[[package]]
+name = "nameservice"
 version = "0.1.0"
 dependencies = [
  "libpcern",
 ]
-
-[[package]]
-name = "libpcern"
-version = "0.1.0"

@@ -2,12 +2,40 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::arch::global_asm;
 
+use crate::cap::{CSlot, CapNodeId};
 use crate::mm::paging;
 use crate::sync::Mutex;
 
 global_asm!(include_str!("task_asm.s"));
 
 pub type TaskId = usize;
+
+/// A task's private capability table: `CSlot` (the handle syscalls take)
+/// is just an index into this. Unforgeable because the kernel is the only
+/// thing that ever pushes an entry -- userspace can hold a slot number but
+/// can never manufacture one that resolves to something it wasn't actually
+/// granted.
+pub struct CSpace {
+    slots: Vec<Option<CapNodeId>>,
+}
+
+impl CSpace {
+    /// Slot 0 is always empty, mirroring the "0 is a reserved sentinel"
+    /// convention already used for `ipc::KERNEL_TASK_ID`.
+    pub fn new() -> CSpace {
+        CSpace { slots: alloc::vec![None] }
+    }
+
+    /// Installs `node` into the next free slot and returns its index.
+    pub fn install(&mut self, node: CapNodeId) -> CSlot {
+        self.slots.push(Some(node));
+        (self.slots.len() - 1) as CSlot
+    }
+
+    pub fn get(&self, slot: CSlot) -> Option<CapNodeId> {
+        self.slots.get(slot as usize).copied().flatten()
+    }
+}
 
 const KERNEL_STACK_SIZE: usize = 16 * 1024;
 /// Reserved bit 1 (always 1) + IF: a freshly created task starts with
@@ -37,15 +65,12 @@ pub struct Task {
     /// all share the boot bootstrap directory (no isolation needed between
     /// them); ring-3 tasks get their own from `mm::paging::PageDirectory`.
     pub page_dir_phys: usize,
-    /// Gates the privileged syscalls (map_memory, register_for_interrupt)
-    /// and which ports `allowed_ports` actually grants -- set only by the
-    /// kernel's own internal spawn code (see Task::new_user), never by the
-    /// create_task syscall, which always spawns ordinary (false) tasks.
-    pub is_driver: bool,
     /// I/O ports this task may access directly from ring 3; installed into
     /// the TSS I/O bitmap by `gdt::set_io_permissions` whenever the
     /// scheduler switches to this task. Empty for ordinary tasks.
     pub allowed_ports: Vec<u16>,
+    /// This task's capability table -- see `CSpace` above.
+    pub cspace: CSpace,
     // Kept only to own the stack allocation for the task's lifetime; also
     // doubles as this task's ring0 stack (TSS.esp0) once it's ring 3.
     #[allow(dead_code)]
@@ -114,8 +139,8 @@ impl Task {
             state: TaskState::Ready,
             esp: sp,
             page_dir_phys: paging::boot_page_directory_phys(),
-            is_driver: false,
             allowed_ports: Vec::new(),
+            cspace: CSpace::new(),
             stack,
         }
     }
@@ -126,17 +151,15 @@ impl Task {
     /// `new_kernel`, but `ret`s into `enter_ring3` (task_asm.s) instead,
     /// which loads user segments and `iret`s into ring 3.
     ///
-    /// `is_driver`/`allowed_ports` are only ever set by callers within the
-    /// kernel itself (main.rs's own spawn calls) -- the create_task
-    /// syscall always passes `false`/`&[]`, so untrusted code can never
-    /// grant itself or a child task hardware access.
-    pub fn new_user(
-        entry_eip: u32,
-        user_esp: u32,
-        page_dir_phys: usize,
-        is_driver: bool,
-        allowed_ports: &[u16],
-    ) -> Task {
+    /// `allowed_ports` is only ever set by callers within the kernel
+    /// itself (main.rs's own spawn calls) -- the create_task syscall
+    /// always passes `&[]`, so untrusted code can never grant itself or a
+    /// child task port access. Memory and IRQ access are gated separately,
+    /// through capabilities (see cap.rs) rather than a spawn-time flag --
+    /// holding a valid `MemoryGrant`/`IrqControl` capability is itself
+    /// sufficient authorization, the same way holding a port doesn't need
+    /// a second "and are you actually allowed to" check.
+    pub fn new_user(entry_eip: u32, user_esp: u32, page_dir_phys: usize, allowed_ports: &[u16]) -> Task {
         let (stack, stack_top) = new_stack();
 
         let mut sp = stack_top;
@@ -159,8 +182,8 @@ impl Task {
             state: TaskState::Ready,
             esp: sp,
             page_dir_phys,
-            is_driver,
             allowed_ports: allowed_ports.to_vec(),
+            cspace: CSpace::new(),
             stack,
         }
     }

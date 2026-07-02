@@ -5,34 +5,46 @@
 //! now fail, proving revocation cascades to a capability that already
 //! crossed into another task's address space.
 //!
-//! Not wired into grub.cfg/main.rs by default -- see driver_test.asm/
-//! irq_test.asm for the established pattern this follows: a documented,
-//! independently buildable fixture, temporarily wired in to verify, then
-//! reverted.
+//! Not wired into grub.cfg/main.rs by default -- built and run on demand
+//! via `make test` (see the repo root's test harness), the same
+//! documented, independently buildable fixture pattern as
+//! driver_test.asm/irq_test.asm before it.
 
 #![no_std]
 #![no_main]
 
 use core::panic::PanicInfo;
 
-const MY_INBOX: u32 = 1;
-const PEER_SLOT: u32 = 2;
-const CONSOLE_SLOT: u32 = 3;
+/// CSlot 1 is the name service (auto-granted -- see loader.rs in the
+/// kernel); this is this task's own inbox. CSlot 3 is task_b, hand-wired
+/// by main.rs the same way console_server's hardware capabilities are --
+/// there's no name to look "the peer in this specific test pairing" up
+/// under.
+const MY_INBOX: u32 = 2;
+const PEER_SLOT: u32 = 3;
 const OP_PUTCHAR: u32 = 0;
 
 const MSG_GIFT: u32 = 1;
 const MSG_ACK: u32 = 2;
 const MSG_GO: u32 = 3;
 
-fn print(s: &[u8]) {
+fn print(console_slot: u32, s: &[u8]) {
     for &b in s {
-        libpcern::send(CONSOLE_SLOT, OP_PUTCHAR, b as u32, 0, 0);
+        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
     }
 }
 
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
+    // A dedicated endpoint for the lookup reply, *not* MY_INBOX: the peer
+    // protocol below also receives on MY_INBOX, and message arrival isn't
+    // ordered -- task_b's gift could arrive before the name service's
+    // reply does, and `recv` would have no way to tell them apart on a
+    // shared inbox (see fs_fat32's identically-motivated storage_reply).
+    let console_reply = libpcern::endpoint_create();
+    let console_slot = libpcern::lookup_name(b"console", console_reply).unwrap_or(0);
+
     let gift_endpoint_slot = libpcern::endpoint_create();
     let badged_slot = libpcern::cap_mint_badged(gift_endpoint_slot, 42);
 
@@ -40,7 +52,7 @@ pub extern "C" fn _start() -> ! {
 
     let ack = libpcern::recv(MY_INBOX);
     if ack.w0 != MSG_ACK {
-        print(b"cap_test_a: FAIL (bad ack)\n");
+        print(console_slot, b"cap_test_a: FAIL (bad ack)\n");
         libpcern::exit(1);
     }
 
@@ -50,7 +62,7 @@ pub extern "C" fn _start() -> ! {
 
     libpcern::send(PEER_SLOT, MSG_GO, 0, 0, 0);
 
-    print(b"cap_test_a: done\n");
+    print(console_slot, b"cap_test_a: done\n");
     libpcern::exit(0);
 }
 

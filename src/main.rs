@@ -164,6 +164,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
+    #[cfg(feature = "test_harness")]
+    test_harness_spawn();
+
     // Spawned last. Never blocks or exits, so block_current()/exit_current()
     // always have at least one task to fall back to instead of panicking
     // when every "real" task is blocked/exited.
@@ -182,6 +185,60 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 fn grant_endpoint_cap(task_id: task::TaskId, endpoint: cap::EndpointId) -> cap::CSlot {
     let node = cap::mint_root(cap::CapKind::Endpoint { id: endpoint });
     scheduler::install_cap_for(task_id, node)
+}
+
+/// Spawns the cap_test fixtures (see `userland/cap_test`) as ring-3
+/// tasks, only present in a kernel built with `--features test_harness`
+/// (see `make test`) -- `grub-test.cfg` is the one grub config whose
+/// module list actually matches the indices below; production's
+/// `grub.cfg` only has modules 0-3. Each fixture gets the same CSlot 1 =
+/// name service / CSlot 2 = own inbox convention as every other task;
+/// the two paired fixtures (which need to reach a specific peer, not
+/// something discoverable by name) additionally get that peer's endpoint
+/// hand-wired at CSlot 3, exactly the way console_server's hardware
+/// capabilities are hand-wired above.
+#[cfg(feature = "test_harness")]
+fn test_harness_spawn() {
+    let cap_test_a_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'cap_test_a'");
+    let cap_test_a_endpoint = ipc::create_endpoint(cap_test_a_id);
+    grant_endpoint_cap(cap_test_a_id, cap_test_a_endpoint); // its CSlot 2: its own inbox
+
+    let cap_test_b_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'cap_test_b'");
+    let cap_test_b_endpoint = ipc::create_endpoint(cap_test_b_id);
+    grant_endpoint_cap(cap_test_b_id, cap_test_b_endpoint); // its CSlot 2: its own inbox
+
+    grant_endpoint_cap(cap_test_a_id, cap_test_b_endpoint); // cap_test_a's CSlot 3: send to cap_test_b
+    grant_endpoint_cap(cap_test_b_id, cap_test_a_endpoint); // cap_test_b's CSlot 3: send to cap_test_a
+
+    let mem_test_a_id = loader::spawn_from_module(6, &[]).expect("no multiboot module 6 found for 'mem_test_a'");
+    let mem_test_a_endpoint = ipc::create_endpoint(mem_test_a_id);
+    grant_endpoint_cap(mem_test_a_id, mem_test_a_endpoint); // its CSlot 2: its own inbox
+
+    let mem_test_b_id = loader::spawn_from_module(7, &[]).expect("no multiboot module 7 found for 'mem_test_b'");
+    let mem_test_b_endpoint = ipc::create_endpoint(mem_test_b_id);
+    grant_endpoint_cap(mem_test_b_id, mem_test_b_endpoint); // its CSlot 2: its own inbox
+
+    grant_endpoint_cap(mem_test_a_id, mem_test_b_endpoint); // mem_test_a's CSlot 3: send to mem_test_b
+    grant_endpoint_cap(mem_test_b_id, mem_test_a_endpoint); // mem_test_b's CSlot 3: send to mem_test_a
+
+    // storage_client_test isn't included here: storage_ata only supports
+    // one client at a time (a single reply_slot/buf_mapped pair, no
+    // per-client state -- see its own doc comment), and fs_fat32 is
+    // already permanently running as one. Running both concurrently
+    // would have them clobber each other's connection. fs_fat32's own
+    // client (fs_client_test, right below) already exercises storage_ata
+    // thoroughly at one remove; storage_client_test is still there for
+    // standalone verification (temporarily wired in with fs_fat32 absent,
+    // the way Checkpoint I originally used it).
+    let fs_client_test_id =
+        loader::spawn_from_module(8, &[]).expect("no multiboot module 8 found for 'fs_client_test'");
+    let fs_client_test_endpoint = ipc::create_endpoint(fs_client_test_id);
+    grant_endpoint_cap(fs_client_test_id, fs_client_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] test_harness: spawned cap_test fixtures (ids {}-{})",
+        cap_test_a_id, fs_client_test_id
+    );
 }
 
 extern "C" fn idle_task() -> ! {

@@ -2,12 +2,12 @@
 //! (name-service lookup + storage_connect + storage_read_block over a
 //! shared-memory grant) end to end, as opposed to the earlier disk-
 //! plumbing spike which called ata::read_sector directly in-process.
-//! Verified against the same host-written test disk image as the spike
-//! (see Makefile/grub.cfg's temporary second `-drive`) -- prints the
-//! first 16 bytes of LBA 0 as hex over the console so the result can be
-//! screendumped and compared byte-for-byte. Not part of the default
-//! build; wired into main.rs only temporarily for this checkpoint's
-//! verification (see cap_test's own doc comment for the convention).
+//! Asserts the FAT32 boot-sector signature (`0x55 0xAA` at the last two
+//! bytes of LBA 0) rather than a bespoke byte pattern, so this can run
+//! against the exact same `make test-fat32-image` disk fs_client_test
+//! uses -- no second disk needed just to give this fixture something
+//! deterministic to check. Not part of the default build; see
+//! `make test`.
 
 #![no_std]
 #![no_main]
@@ -57,13 +57,19 @@ pub extern "C" fn _start() -> ! {
         libpcern::exit(1);
     }
 
-    let buf = unsafe { core::slice::from_raw_parts(BUF_VIRT as *const u8, 16) };
+    let buf = unsafe { core::slice::from_raw_parts(BUF_VIRT as *const u8, 512) };
     print(console_slot, b"storage_client_test: LBA0 first 16 bytes: ");
-    for &byte in buf {
+    for &byte in &buf[..16] {
         print_hex_byte(console_slot, byte);
     }
     print(console_slot, b"\n");
 
+    if buf[510] != 0x55 || buf[511] != 0xAA {
+        print(console_slot, b"storage_client_test: FAIL (bad boot signature)\n");
+        libpcern::exit(1);
+    }
+
+    print(console_slot, b"storage_client_test: PASS\n");
     libpcern::exit(0);
 }
 

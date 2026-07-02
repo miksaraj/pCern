@@ -3,6 +3,7 @@
 
 # Make results
 iso
+iso-test
 *.iso
 *.o
 *.elf

@@ -10,9 +10,12 @@
 
 use core::panic::PanicInfo;
 
-const MY_INBOX: u32 = 1;
-const PEER_SLOT: u32 = 2;
-const CONSOLE_SLOT: u32 = 3;
+/// CSlot 1 is the name service (auto-granted); this is this task's own
+/// inbox. CSlot 3 is mem_test_a, hand-wired by main.rs -- see
+/// task_a.rs's doc comment for why this test pairing isn't looked up by
+/// name.
+const MY_INBOX: u32 = 2;
+const PEER_SLOT: u32 = 3;
 const OP_PUTCHAR: u32 = 0;
 
 const SHARED_VIRT: u32 = 0x0090_0000;
@@ -21,23 +24,29 @@ const PATTERN: u32 = 0xCAFE_BABE;
 const MSG_SHARE: u32 = 1;
 const MSG_DONE: u32 = 2;
 
-fn print(s: &[u8]) {
+fn print(console_slot: u32, s: &[u8]) {
     for &b in s {
-        libpcern::send(CONSOLE_SLOT, OP_PUTCHAR, b as u32, 0, 0);
+        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
     }
 }
 
 #[no_mangle]
 #[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
+    // A dedicated endpoint for the lookup reply -- see cap_test's
+    // task_a.rs doc comment: MY_INBOX also receives the peer protocol
+    // below, and the two can race on a shared inbox.
+    let console_reply = libpcern::endpoint_create();
+    let console_slot = libpcern::lookup_name(b"console", console_reply).unwrap_or(0);
+
     let share = libpcern::recv(MY_INBOX);
     if share.w0 != MSG_SHARE || share.transferred_slot == 0 {
-        print(b"mem_test_b: FAIL (no grant)\n");
+        print(console_slot, b"mem_test_b: FAIL (no grant)\n");
         libpcern::exit(1);
     }
 
     if libpcern::map_memory(share.transferred_slot, SHARED_VIRT) != 0 {
-        print(b"mem_test_b: FAIL (map)\n");
+        print(console_slot, b"mem_test_b: FAIL (map)\n");
         libpcern::exit(1);
     }
 
@@ -45,11 +54,11 @@ pub extern "C" fn _start() -> ! {
     libpcern::send(PEER_SLOT, MSG_DONE, 0, 0, 0);
 
     if observed != PATTERN {
-        print(b"mem_test_b: FAIL (pattern mismatch)\n");
+        print(console_slot, b"mem_test_b: FAIL (pattern mismatch)\n");
         libpcern::exit(1);
     }
 
-    print(b"mem_test_b: PASS\n");
+    print(console_slot, b"mem_test_b: PASS\n");
     libpcern::exit(0);
 }
 

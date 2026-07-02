@@ -7,6 +7,14 @@ edition = "2021"
 name = "pcern"
 path = "src/main.rs"
 
+[features]
+# Spawns the cap_test fixtures (capability transfer/revocation, shared
+# memory grants, storage/fs protocols) alongside the normal service set
+# -- see `make test` and src/main.rs's test_harness_spawn. Never enabled
+# for a production boot (grub.cfg's module list wouldn't match what this
+# expects); grub-test.cfg is the one that does.
+test_harness = []
+
 [profile.dev]
 panic = "abort"
 

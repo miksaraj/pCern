@@ -17,9 +17,11 @@ NAMESERVICE_TARGET := i686-pcern-user
 NAMESERVICE_ELF := $(NAMESERVICE_DIR)/target/$(NAMESERVICE_TARGET)/$(PROFILE)/nameservice
 NAMESERVICE_BIN := $(USERLAND_DIR)/nameservice.bin
 
-# Checkpoint F/G test fixtures (see userland/cap_test) -- not part of the
-# default `iso`/`userland` build, same as driver_test.asm/irq_test.asm;
-# built on demand via `make cap_test` for temporary verification only.
+# Regression test fixtures (see userland/cap_test) covering capability
+# transfer/revocation, shared memory grants, and the storage/fs
+# protocols -- not part of the default `iso`/`userland` build. Built via
+# `make cap_test` on their own, or use `make test` to build, boot, and
+# check all of them automatically (see run_tests.sh).
 CAP_TEST_DIR := $(USERLAND_DIR)/cap_test
 CAP_TEST_TARGET := i686-pcern-user
 
@@ -42,6 +44,15 @@ ISO_PATH := iso
 BOOT_PATH := $(ISO_PATH)/boot
 GRUB_PATH := $(BOOT_PATH)/grub
 ISO := pcern-i386.iso
+
+# Test harness (see `make test`): a separate kernel build (--features
+# test_harness) + grub config + ISO, so the production `iso`/`kernel`
+# targets above are completely untouched by any of this.
+CFG_TEST := grub-test.cfg
+ISO_TEST_PATH := iso-test
+BOOT_TEST_PATH := $(ISO_TEST_PATH)/boot
+GRUB_TEST_PATH := $(BOOT_TEST_PATH)/grub
+ISO_TEST := pcern-test-i386.iso
 
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
@@ -118,6 +129,31 @@ iso: kernel userland
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
+.PHONY: kernel-test
+kernel-test:
+	$(CARGO) build --$(PROFILE) --features test_harness
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-test
+iso-test: kernel-test userland cap_test
+	$(MKDIR) $(GRUB_TEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_TEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_TEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_TEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_TEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_TEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/cap_test_a.bin $(BOOT_TEST_PATH)/cap_test_a.bin
+	$(CP) $(USERLAND_DIR)/cap_test_b.bin $(BOOT_TEST_PATH)/cap_test_b.bin
+	$(CP) $(USERLAND_DIR)/mem_test_a.bin $(BOOT_TEST_PATH)/mem_test_a.bin
+	$(CP) $(USERLAND_DIR)/mem_test_b.bin $(BOOT_TEST_PATH)/mem_test_b.bin
+	$(CP) $(USERLAND_DIR)/fs_client_test.bin $(BOOT_TEST_PATH)/fs_client_test.bin
+	$(CP) $(CFG_TEST) $(GRUB_TEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_TEST) $(ISO_TEST_PATH)
+
+.PHONY: test
+test: iso-test test-fat32-image
+	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
+
 .PHONY: test-fat32-image
 test-fat32-image:
 	$(RM) $(TEST_FAT32_IMG)
@@ -138,4 +174,4 @@ clean:
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

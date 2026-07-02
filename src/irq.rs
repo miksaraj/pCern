@@ -23,10 +23,7 @@ pub fn register(irq: u32, task_id: TaskId) -> bool {
     }
 }
 
-/// The task currently registered for `irq`, if any. Unused until the next
-/// checkpoint wires the keyboard ISR to call this instead of handling
-/// keystrokes itself.
-#[allow(dead_code)]
+/// The task currently registered for `irq`, if any.
 pub fn handler_for(irq: u32) -> Option<TaskId> {
     HANDLERS.lock().get(irq as usize).copied().flatten()
 }

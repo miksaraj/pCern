@@ -1,6 +1,8 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::idt::InterruptStackFrame;
+use crate::ipc;
+use crate::irq;
 use crate::pic;
 use crate::port::inb;
 use crate::print;
@@ -25,10 +27,20 @@ const SCANCODE_ASCII_SHIFTED: [u8; 58] = [
     b'N', b'M', b'<', b'>', b'?', 0, b'*', 0, b' ',
 ];
 
-/// IRQ1: reads one scancode (set 1) and echoes printable ASCII to the VGA
-/// console. Only basic keys and shift are handled, no caps lock / numpad.
+/// IRQ1: acks (reads the raw scancode) and, if a userspace driver has
+/// registered for IRQ1 (see irq.rs / the register_for_interrupt syscall),
+/// forwards it there via a non-blocking IPC notification. Also still
+/// echoes printable ASCII to the kernel's own VGA console directly -- a
+/// safety net kept until Checkpoint D's console server takes over this
+/// job entirely; only basic keys and shift are handled here, no caps
+/// lock/numpad.
 pub extern "x86-interrupt" fn handler(_frame: InterruptStackFrame) {
     let scancode = unsafe { inb(0x60) };
+
+    if let Some(driver) = irq::handler_for(1) {
+        ipc::notify_interrupt(driver, 1, scancode as u32);
+    }
+
     let released = scancode & 0x80 != 0;
     let code = (scancode & 0x7F) as usize;
 

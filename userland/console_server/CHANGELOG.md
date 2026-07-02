@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misbehaving reader could, in principle, block the whole console (a
   known limitation, not yet needed against an untrusted client).
 
+### Security
+
+- `CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE` initially had no
+  check that a message came from the task that owned the current reader
+  connection -- any task (including one with no privilege beyond the
+  universal name-service auto-grant) could re-point the connection at
+  itself and receive every keystroke typed afterward instead of the
+  legitimate reader. Fixed by latching the kernel-attested sender id of
+  the first successful `SET_BUFFER` as the connection's owner and
+  ignoring these three ops from any other sender.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release.

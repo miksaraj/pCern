@@ -179,6 +179,16 @@ pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
 /// echo, too -- until it does. Acceptable for this phase's single
 /// trusted shell client; would need revisiting (e.g. a bounded queue or
 /// timeout) if an untrusted reader is ever introduced.
+///
+/// The first sender to successfully complete `CONSOLE_OP_SET_BUFFER`
+/// becomes console_server's one reader for the rest of this boot --
+/// every later `CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE` from any
+/// *other* sender is silently ignored (checked against the
+/// kernel-attested sender id, not anything the caller provides). Without
+/// this, any task -- including one with no privilege beyond the
+/// universal name-service auto-grant, since `console` lookups are open
+/// to any caller -- could re-point the connection at itself and receive
+/// every keystroke typed afterward instead of the legitimate reader.
 pub const CONSOLE_OP_SET_BUFFER: u32 = 1;
 pub const CONSOLE_OP_SET_READER: u32 = 2;
 pub const CONSOLE_OP_READ_LINE: u32 = 3;

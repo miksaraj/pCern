@@ -76,6 +76,14 @@ further keystroke echo) until it does. Fine for this phase's one trusted
 shell client; would need revisiting (a queue or timeout) against an
 untrusted reader.
 
+The first sender to successfully complete `CONSOLE_OP_SET_BUFFER` is
+latched as the one reader for the rest of the boot (checked against the
+kernel-attested sender id on every later `SET_BUFFER`/`SET_READER`/
+`READ_LINE`, not anything the caller provides) -- otherwise any task,
+including one with no privilege beyond the universal name-service
+auto-grant, could re-point the connection at itself and receive every
+keystroke typed afterward instead of the legitimate reader.
+
 Backspace is tracked against the accumulator's own length (bounded at
 `0`), independent of `vga.rs`'s unrelated screen-cursor backspace
 handling. Bytes typed once the accumulator reaches `CONSOLE_LINE_MAX`

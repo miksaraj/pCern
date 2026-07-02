@@ -41,6 +41,26 @@
 //! rejected/invalid grant) is answered immediately with length `0`
 //! rather than left to hang the caller forever with no buffer to satisfy
 //! it.
+//!
+//! The three `CONSOLE_OP_*` ops above are only honored from the task
+//! that first successfully establishes a reader connection: the first
+//! `CONSOLE_OP_SET_BUFFER`/`SET_READER` received (from whichever task
+//! sends it first) latches that sender's kernel-attested task id
+//! (`r.sender` -- unforgeable, the same value `nameservice`'s own
+//! registration allowlist trusts) as `reader_owner`, and every
+//! subsequent message on these three ops is silently ignored unless it
+//! comes from that same task id. Without this, any task -- including
+//! one spawned through the shell's own `run` command with no privilege
+//! beyond the universal name-service auto-grant, since `console`
+//! lookups are open to any caller and `SYS_MEM_ALLOC`/
+//! `SYS_ENDPOINT_CREATE`/`SYS_SEND` need no capability at all -- could
+//! silently re-point `reader_slot`/the mapped buffer at itself and
+//! receive every keystroke typed afterward (a confidentiality break, not
+//! just disruption of the legitimate reader). `reader_owner` is latched
+//! for the rest of this boot, the same permanent-single-client scope
+//! `storage_ata`/`fs_fat32` already have -- there's no handoff/release
+//! operation, since only one task (the shell) is ever expected to hold
+//! this role for the phase this project is at.
 
 #![no_std]
 #![no_main]
@@ -96,8 +116,12 @@ pub extern "C" fn _start() -> ! {
     // = a line already completed (Enter was pressed) before the client
     // asked for one, and is waiting in the buffer to be claimed -- the two
     // are never true at the same time (see the keystroke handling below).
+    // `reader_owner` (0 = none yet) is the kernel-attested task id that
+    // first connected -- see the module doc comment for why every
+    // CONSOLE_OP_* connection message is rejected from any other sender.
     let mut input_buf_mapped = false;
     let mut reader_slot: u32 = 0;
+    let mut reader_owner: u32 = 0;
     let mut armed = false;
     let mut line_ready = false;
     let mut line_len: usize = 0;
@@ -157,17 +181,25 @@ pub extern "C" fn _start() -> ! {
                     writer.sync_hardware_cursor();
                 }
                 libpcern::CONSOLE_OP_SET_BUFFER => {
-                    if r.transferred_slot != 0 && libpcern::map_memory(r.transferred_slot, INPUT_BUF_VIRT) == 0 {
+                    // Latches `reader_owner` on the first sender to
+                    // successfully provide a valid buffer grant; any
+                    // other sender's SET_BUFFER is ignored from then on
+                    // -- see the module doc comment for why.
+                    if (reader_owner == 0 || reader_owner == r.sender)
+                        && r.transferred_slot != 0
+                        && libpcern::map_memory(r.transferred_slot, INPUT_BUF_VIRT) == 0
+                    {
+                        reader_owner = r.sender;
                         input_buf_mapped = true;
                     }
                 }
                 libpcern::CONSOLE_OP_SET_READER => {
-                    if r.transferred_slot != 0 {
+                    if reader_owner == r.sender && r.transferred_slot != 0 {
                         reader_slot = r.transferred_slot;
                     }
                 }
                 libpcern::CONSOLE_OP_READ_LINE => {
-                    if reader_slot != 0 {
+                    if reader_owner == r.sender && reader_slot != 0 {
                         if !input_buf_mapped {
                             // No working buffer was ever connected (e.g.
                             // an invalid/rejected grant) -- reply right

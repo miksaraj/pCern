@@ -3,6 +3,14 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
+// Each spawns a different binary at multiboot module index 4
+// (test_harness_spawn expects cap_test_a, keyboard_test_spawn expects
+// console_input_test) against its own dedicated grub config -- building
+// with both would have them race for the same module slot with no
+// identity check to catch the mismatch.
+#[cfg(all(feature = "test_harness", feature = "keyboard_test"))]
+compile_error!("test_harness and keyboard_test are mutually exclusive boot configurations; build one or the other, never both");
+
 extern crate alloc;
 
 use core::arch::global_asm;

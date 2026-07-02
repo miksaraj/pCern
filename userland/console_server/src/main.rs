@@ -22,16 +22,25 @@
 //! (see libpcern's CONSOLE_OP_*/console_connect/console_read_line, and
 //! that module's doc comment for the wire protocol and its one
 //! documented hazard) mirroring storage_ata's SET_BUFFER/SET_REPLY
-//! shape. Every keystroke is still echoed to the screen unconditionally;
-//! additionally, once a reader has connected and armed a read via
-//! `CONSOLE_OP_READ_LINE`, bytes are also accumulated into the reader's
-//! shared page until Enter completes the line, at which point this task
-//! replies with the line length and disarms until the next
-//! `CONSOLE_OP_READ_LINE`. Backspace is tracked against this
-//! accumulator's own length (bounded at 0), independently of vga.rs's
-//! unrelated screen-cursor backspace handling; bytes typed once the
-//! accumulator hits `CONSOLE_LINE_MAX` are dropped (not buffered), not an
-//! error.
+//! shape. Every keystroke is still echoed to the screen unconditionally.
+//! Bytes are accumulated into the reader's shared page as soon as a
+//! buffer is connected -- independent of whether a `CONSOLE_OP_READ_LINE`
+//! request is currently outstanding, so a client that's busy (e.g. a
+//! shell mid-command) doesn't silently lose keystrokes typed ahead of its
+//! next request. If Enter completes a line before the client has asked
+//! for one, the completed line just waits (`line_ready`) for the next
+//! `CONSOLE_OP_READ_LINE`, which is answered immediately in that case;
+//! only one completed-but-unclaimed line is kept at a time (further
+//! typing is echoed but not accumulated until it's claimed), the same
+//! one-result-in-flight scope `storage_ata`/`fs_fat32` already have.
+//! Backspace is tracked against this accumulator's own length (bounded at
+//! 0), independently of vga.rs's unrelated screen-cursor backspace
+//! handling; bytes typed once the accumulator hits `CONSOLE_LINE_MAX` are
+//! dropped (not buffered), not an error. A `CONSOLE_OP_READ_LINE` that
+//! arrives before a buffer was ever successfully connected (e.g. a
+//! rejected/invalid grant) is answered immediately with length `0`
+//! rather than left to hang the caller forever with no buffer to satisfy
+//! it.
 
 #![no_std]
 #![no_main]
@@ -52,18 +61,19 @@ const VGA_BUFFER_VIRT: u32 = 0x0090_0000;
 /// Where a connected reader's shared input-buffer page gets mapped in
 /// *this* task's own address space -- independent of whatever virtual
 /// address the reader chose in its own space, since they're separate
-/// page directories (same reasoning as storage_ata's BUF_VIRT).
-const INPUT_BUF_VIRT: u32 = 0x0080_0000;
+/// page directories. Deliberately *not* `loader.rs`'s `USER_STACK_TOP`
+/// (0x0080_0000, the address storage_ata's/fs_fat32's own buffers happen
+/// to reuse): mapping a page there would sit exactly at this task's own
+/// stack-overflow guard boundary, in this task's own address space,
+/// turning a would-be clean page fault on overflow into silent
+/// corruption of the connected reader's buffer instead.
+const INPUT_BUF_VIRT: u32 = 0x00A0_0000;
 
 /// This task's own inbox endpoint -- see the module doc comment. CSlot 1
 /// (the name service) is auto-granted, not listed here.
 const MY_INBOX_SLOT: u32 = 2;
 const VGA_GRANT_SLOT: u32 = 3;
 const IRQ_CONTROL_SLOT: u32 = 4;
-
-/// Protocol other tasks use to reach the screen: `send(CONSOLE_SLOT,
-/// OP_PUTCHAR, byte, 0)`, one call per character.
-const OP_PUTCHAR: u32 = 0;
 
 #[no_mangle]
 #[link_section = ".text.start"]
@@ -81,10 +91,15 @@ pub extern "C" fn _start() -> ! {
 
     // Checkpoint L's line-input state. `reader_slot` is a capability slot
     // (0 = none connected yet) rather than a raw task id, same addressing
-    // convention as everything else here.
+    // convention as everything else here. `armed` = a CONSOLE_OP_READ_LINE
+    // request is outstanding, waiting for a line to complete. `line_ready`
+    // = a line already completed (Enter was pressed) before the client
+    // asked for one, and is waiting in the buffer to be claimed -- the two
+    // are never true at the same time (see the keystroke handling below).
     let mut input_buf_mapped = false;
     let mut reader_slot: u32 = 0;
     let mut armed = false;
+    let mut line_ready = false;
     let mut line_len: usize = 0;
 
     loop {
@@ -95,7 +110,14 @@ pub extern "C" fn _start() -> ! {
                 ansi.feed(ascii, &mut writer);
                 writer.sync_hardware_cursor();
 
-                if armed {
+                // Accumulate whenever a buffer is connected and there
+                // isn't already a completed, unclaimed line sitting in
+                // it -- deliberately *not* gated on `armed`, so keystrokes
+                // typed before the client's next CONSOLE_OP_READ_LINE
+                // request (e.g. while a shell is still busy with its
+                // previous command) are still captured instead of only
+                // being echoed and dropped.
+                if input_buf_mapped && !line_ready {
                     if ascii == 8 {
                         // Backspace: trim our own accumulator, independent
                         // of vga.rs's screen-cursor backspace above.
@@ -103,12 +125,17 @@ pub extern "C" fn _start() -> ! {
                             line_len -= 1;
                         }
                     } else if ascii == b'\n' {
-                        armed = false;
-                        if reader_slot != 0 {
+                        if armed && reader_slot != 0 {
                             libpcern::send(reader_slot, line_len as u32, 0, 0, 0);
+                            armed = false;
+                            line_len = 0;
+                        } else {
+                            // No outstanding request yet -- hold the
+                            // completed line for the next READ_LINE
+                            // rather than discarding it.
+                            line_ready = true;
                         }
-                        line_len = 0;
-                    } else if input_buf_mapped && line_len < libpcern::CONSOLE_LINE_MAX {
+                    } else if line_len < libpcern::CONSOLE_LINE_MAX {
                         unsafe {
                             let buf = core::slice::from_raw_parts_mut(
                                 INPUT_BUF_VIRT as *mut u8,
@@ -125,7 +152,7 @@ pub extern "C" fn _start() -> ! {
             }
         } else {
             match r.w0 {
-                OP_PUTCHAR => {
+                libpcern::OP_PUTCHAR => {
                     ansi.feed(r.w1 as u8, &mut writer);
                     writer.sync_hardware_cursor();
                 }
@@ -140,9 +167,21 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 libpcern::CONSOLE_OP_READ_LINE => {
-                    if input_buf_mapped && reader_slot != 0 {
-                        armed = true;
-                        line_len = 0;
+                    if reader_slot != 0 {
+                        if !input_buf_mapped {
+                            // No working buffer was ever connected (e.g.
+                            // an invalid/rejected grant) -- reply right
+                            // away rather than leaving the caller blocked
+                            // in recv() forever with nothing that could
+                            // ever satisfy it.
+                            libpcern::send(reader_slot, 0, 0, 0, 0);
+                        } else if line_ready {
+                            libpcern::send(reader_slot, line_len as u32, 0, 0, 0);
+                            line_ready = false;
+                            line_len = 0;
+                        } else {
+                            armed = true;
+                        }
                     }
                 }
                 _ => {}

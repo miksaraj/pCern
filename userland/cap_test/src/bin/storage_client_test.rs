@@ -13,19 +13,13 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use libpcern::print;
 
 /// CSlot 1 is the name service (auto-granted). CSlot 2 is this task's own
 /// inbox (see main.rs's temporary wiring for this fixture).
 const MY_INBOX: u32 = 2;
-const OP_PUTCHAR: u32 = 0;
 
 const BUF_VIRT: u32 = 0x0090_0000;
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
-    }
-}
 
 fn print_hex_byte(console_slot: u32, b: u8) {
     const HEX: &[u8; 16] = b"0123456789abcdef";

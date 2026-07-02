@@ -30,43 +30,18 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use libpcern::{print, print_u32};
 
 /// CSlot 1 is the name service (auto-granted). CSlot 2 is this task's own
 /// inbox -- see the module doc comment for why console line-ready
 /// notifications deliberately do *not* share it.
 const MY_INBOX: u32 = 2;
-const OP_PUTCHAR: u32 = 0;
 
 const CONSOLE_BUF_VIRT: u32 = 0x00D0_0000;
 const FS_BUF_VIRT: u32 = 0x00D1_0000;
 const RUN_BUF_VIRT: u32 = 0x00D2_0000;
 const SECTOR_SIZE: u32 = 512;
 const PAGE_SIZE: u32 = 4096;
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
-    }
-}
-
-fn print_u32(console_slot: u32, mut n: u32) {
-    if n == 0 {
-        print(console_slot, b"0");
-        return;
-    }
-    let mut digits = [0u8; 10];
-    let mut i = 0;
-    while n > 0 {
-        digits[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-        i += 1;
-    }
-    let mut buf = [0u8; 10];
-    for j in 0..i {
-        buf[j] = digits[i - 1 - j];
-    }
-    print(console_slot, &buf[..i]);
-}
 
 /// Splits `line` into `(command, argument)` on the first space; `argument`
 /// is empty if there isn't one. Trailing/leading spaces in `argument`

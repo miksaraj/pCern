@@ -30,6 +30,7 @@
 
 use core::arch::asm;
 use core::panic::PanicInfo;
+use libpcern::print;
 
 /// CSlot 1 is the name service (auto-granted). CSlot 2 is this task's own
 /// inbox -- reused as both the name-lookup reply and the console reader
@@ -38,7 +39,6 @@ use core::panic::PanicInfo;
 /// task_a/b's -- see CLAUDE.md's "one inbox is not automatically safe for
 /// two roles").
 const MY_INBOX: u32 = 2;
-const OP_PUTCHAR: u32 = 0;
 
 const BUF_VIRT: u32 = 0x00B0_0000;
 
@@ -67,12 +67,6 @@ fn serial_print(s: &[u8]) {
             while inb(COM1 + 5) & 0x20 == 0 {}
             outb(COM1, b);
         }
-    }
-}
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
     }
 }
 

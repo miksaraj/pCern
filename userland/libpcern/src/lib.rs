@@ -206,6 +206,45 @@ pub fn console_read_line(console_slot: u32, reader_slot: u32) -> u32 {
     recv(reader_slot).w0
 }
 
+/// Wire protocol other tasks use to reach the screen: `send(console_slot,
+/// OP_PUTCHAR, byte, 0, 0)`, one call per character -- see
+/// userland/console_server's own README for the full protocol.
+pub const OP_PUTCHAR: u32 = 0;
+
+/// Sends `s` to `console_slot` one byte at a time via `OP_PUTCHAR`. Used
+/// by every userland program that prints diagnostics directly (rather
+/// than through a higher-level protocol), so this one copy is shared
+/// instead of being hand-duplicated per crate.
+#[allow(dead_code)]
+pub fn print(console_slot: u32, s: &[u8]) {
+    for &b in s {
+        send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
+    }
+}
+
+/// Prints `n` in decimal via `print`. No sign, no padding -- just enough
+/// for the small diagnostic counters/sizes this project's fixtures and
+/// shell print (task ids, file sizes, checksums).
+#[allow(dead_code)]
+pub fn print_u32(console_slot: u32, mut n: u32) {
+    if n == 0 {
+        print(console_slot, b"0");
+        return;
+    }
+    let mut digits = [0u8; 10];
+    let mut i = 0;
+    while n > 0 {
+        digits[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    let mut buf = [0u8; 10];
+    for j in 0..i {
+        buf[j] = digits[i - 1 - j];
+    }
+    print(console_slot, &buf[..i]);
+}
+
 /// Packs up to 8 bytes of `name` into two little-endian u32 words,
 /// zero-padded if shorter (longer names are truncated to 8 bytes). Used
 /// by both sides of the name-service protocol so the encoding only lives

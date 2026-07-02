@@ -16,38 +16,13 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use libpcern::{print, print_u32};
 
 /// CSlot 1 is the name service (auto-granted). CSlot 2 is this task's
 /// own inbox (see main.rs's temporary wiring for this fixture).
 const MY_INBOX: u32 = 2;
-const OP_PUTCHAR: u32 = 0;
 
 const BUF_VIRT: u32 = 0x00A0_0000;
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
-    }
-}
-
-fn print_u32(console_slot: u32, mut n: u32) {
-    if n == 0 {
-        print(console_slot, b"0");
-        return;
-    }
-    let mut digits = [0u8; 10];
-    let mut i = 0;
-    while n > 0 {
-        digits[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-        i += 1;
-    }
-    let mut buf = [0u8; 10];
-    for j in 0..i {
-        buf[j] = digits[i - 1 - j];
-    }
-    print(console_slot, &buf[..i]);
-}
 
 #[no_mangle]
 #[link_section = ".text.start"]

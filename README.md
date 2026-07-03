@@ -130,6 +130,15 @@ keystrokes via QEMU's monitor `sendkey` command rather than a synthetic
 in-process byte -- see `run_console_input_test.sh` and
 `userland/cap_test/README.md` for how synchronization works.
 
+## Releases
+
+Publishing a GitHub release (`.github/workflows/release.yml`, triggered on
+`release: published`, not on tag push -- a tag push happens before release
+notes are finalized) builds the production ISO from the tagged commit via
+`make iso` and attaches it to the release as `pcern-<tag>-i386.iso`. This
+only applies to releases published from now on; it does not retroactively
+attach an ISO to earlier releases.
+
 ## Repository layout
 
 ```

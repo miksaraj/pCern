@@ -11,6 +11,12 @@ as a whole.
 
 ## [Unreleased]
 
+### Added
+
+- A `release.yml` GitHub Actions workflow: on publishing a GitHub release,
+  builds the production ISO from the tagged commit (`make iso`) and
+  attaches it as `pcern-<tag>-i386.iso`.
+
 ## [0.3.0] - 2026-07-02
 
 The first interactive OS experience: type a command, something happens.

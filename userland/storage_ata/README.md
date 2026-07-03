@@ -28,16 +28,20 @@ at a time.
 
 ## Protocol
 
-A client connects once, then issues any number of reads:
+A client connects once, then issues any number of reads and writes:
 
 1. `STORAGE_OP_SET_BUFFER` (`transfer` = a `MemoryGrant` for a page the
    client already mapped locally) -- this driver maps the same physical
-   page into its own address space and reads sectors directly into it.
+   page into its own address space and reads/writes sectors directly
+   through it.
 2. `STORAGE_OP_SET_REPLY` (`transfer` = a capability to the client's own
-   inbox) -- where read replies get sent.
+   inbox) -- where replies get sent.
 3. Any number of `STORAGE_OP_READ_BLOCK` (`w1` = LBA), each replied to on
    the endpoint from step 2 with `w0 = 1` (success, sector now sitting in
    the shared page) or `w0 = 0` (failure).
+4. Any number of `STORAGE_OP_WRITE_BLOCK` (`w1` = LBA, Phase 7 Checkpoint
+   P) -- writes the shared page's current bytes to that sector, replying
+   the same way. No cache-flush is issued after (see the CHANGELOG).
 
 Two messages are needed for setup rather than one because a single
 message can carry at most one capability transfer, and this handshake

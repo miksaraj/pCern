@@ -11,6 +11,49 @@ as a whole.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-03
+
+Read, write, and edit text files: a real full-screen editor, built on top
+of write support all the way down the storage stack.
+
+### Added
+
+- ATA/IDE write support in `storage_ata` (Checkpoint P): a new
+  `STORAGE_OP_WRITE_BLOCK` protocol op alongside the existing
+  `READ_BLOCK`, backed by a real `write_sector` (`CMD_WRITE_SECTORS`,
+  correct DRQ-wait-per-word sequencing, a `STATUS_DF` write-fault check).
+- Write support in `fs_fat32` (Checkpoint Q): overwrite, growth past a
+  file's current cluster span (free-cluster allocation + FAT chain
+  extension, mirrored to both FAT copies), and brand-new file creation,
+  through a new `FS_OP_WRITE` op and a "create if missing" flag on the
+  existing open op.
+- A raw single-keystroke input mode in `console_server` (Checkpoint R):
+  `CONSOLE_OP_SET_MODE`/`CONSOLE_OP_READ_KEY`, layered onto the existing
+  line-input reader connection rather than a second one. `keyboard.rs`
+  gained Ctrl-state tracking and `0xE0`-prefixed extended-key decoding
+  (arrows, Home/End/Delete/PageUp/PageDown) to support it.
+- `shell`'s `edit <file>` command (Checkpoint S): a full-screen text
+  editor (arrow/Home/End/Delete/Backspace/insert, Ctrl-S to save, Ctrl-Q
+  to discard) built on the three additions above. The editor's core logic
+  lives in a new `libpcern::editor` module, shared with a `cap_test`
+  regression fixture so the exact code that ships is the exact code that
+  fixture exercises.
+
+### Fixed
+
+- `console_server`'s raw-mode key delivery initially held only one
+  unclaimed keystroke, overwriting (dropping) any additional ones that
+  arrived while a client was busy -- a real case for the editor, whose
+  redraw cost scales with how much has been typed so far. Replaced with a
+  32-deep queue.
+- `shell`'s `edit` command originally switched the console into raw mode
+  only after allocating the editor's buffer and opening/loading the file
+  -- a user typing the instant `edit <file>` completed could have those
+  keystrokes land while the connection was still in line mode, silently
+  absorbed by its echo/accumulate path instead of reaching the editor.
+  Fixed by switching to raw mode as the very first thing the command
+  does.
+
 ## [0.3.0] - 2026-07-03
 
 The first interactive OS experience: type a command, something happens.

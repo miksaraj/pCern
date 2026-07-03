@@ -1,9 +1,9 @@
 # fs_fat32
 
-A read-only FAT32 filesystem server. Looks up `"storage"` and reads
-sectors through `storage_ata`, then registers as `"fs"` and serves the
-same kind of shared-memory-grant protocol to its own clients that
-`storage_ata` serves to it.
+A FAT32 filesystem server (read and write, Phase 7 Checkpoint Q). Looks
+up `"storage"` and reads/writes sectors through `storage_ata`, then
+registers as `"fs"` and serves the same kind of shared-memory-grant
+protocol to its own clients that `storage_ata` serves to it.
 
 ## Capabilities it needs
 
@@ -27,7 +27,6 @@ automatically safe for two roles.
 - Root-directory files only, no subdirectory traversal.
 - 8.3 names only -- long-filename (`attr == 0x0F`) and volume-label
   entries are recognized and skipped, never matched.
-- Read-only.
 - One client and one open file at a time.
 
 The one FAT32-specific landmine worth knowing about if you're reading
@@ -53,9 +52,21 @@ budget can carry, so it's split the same way setup is:
   incrementing `offset` by whatever came back, same partial-read contract
   as `storage_ata`'s.
 
-See `userland/libpcern`'s `fs_connect`/`fs_open`/`fs_read` for the
-client-side helpers, and `userland/cap_test/src/bin/fs_client_test.rs` for
-a complete example client.
+`FS_OP_OPEN_NAME2`'s `w2` (Phase 7, Checkpoint Q) is a "create if
+missing" flag: `0` opens an existing file only (the original behavior,
+unchanged for every read-only caller), `1` opens an existing file or
+creates a fresh zero-length one. `FS_OP_WRITE` (`w1` = offset, `w2` =
+length) mirrors `FS_OP_READ`'s shape and partial-transfer contract
+exactly, writing from the shared buffer and growing the file (allocating
+new clusters as needed) whenever the write's end offset exceeds the
+current size; the reply's `w0` is the number of bytes actually written
+(`0` = no file open, buffer not mapped, or the disk is out of free
+clusters).
+
+See `userland/libpcern`'s `fs_connect`/`fs_open`/`fs_open_for_write`/
+`fs_read`/`fs_write` for the client-side helpers, and
+`userland/cap_test/src/bin/fs_client_test.rs` for a complete example
+client (including the write/overwrite/readback exercise).
 
 ## Testing it
 

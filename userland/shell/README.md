@@ -27,6 +27,18 @@ completing while the shell is still blocked waiting on an `fs_open`/
 - **`read <file>`** -- opens `<file>` via `fs_fat32` and prints its
   contents a sector at a time, the same read loop `cap_test`'s
   `fs_client_test` already exercises.
+- **`edit <file>`** -- a full-screen text editor (Phase 7, Checkpoint S).
+  Opens `<file>`, creating a fresh zero-length one if it doesn't already
+  exist, and loads any existing content into a 16-page (64 KiB) buffer.
+  Switches the console into raw single-keystroke mode (Checkpoint R) and
+  redraws the buffer on every change via the console's existing ANSI
+  cursor-addressing escapes. Supports arrow-key/Home/End/Delete/
+  Backspace navigation and editing, plain-ASCII insertion, Ctrl-S to save
+  (via `fs_fat32`'s write support, Checkpoint Q) and return to the
+  prompt, and Ctrl-Q to discard and return without saving. The editor's
+  actual logic lives in `libpcern::editor::Editor` -- see that crate's
+  README for why, and `userland/cap_test/src/bin/editor_input_test.rs`
+  for the regression fixture that exercises the exact same code.
 - **`run <file>`** -- opens `<file>`, reads it into a single
   `mem_alloc`'d page (capped at 4096 bytes -- see below), and spawns it
   via `SYS_SPAWN_FROM_MEMORY`. Prints the new task's id, or an error if

@@ -38,20 +38,21 @@ physical memory beyond what a capability specifically grants.
   and any task can look up by name.
 - **storage_ata** -- a polling-only ATA/IDE PIO driver for the primary bus,
   registered as `"storage"`.
-- **fs_fat32** -- a read-only FAT32 filesystem server, registered as
-  `"fs"`, that reads sectors through `storage_ata` and serves files to its
-  own clients.
+- **fs_fat32** -- a FAT32 filesystem server (read and write), registered
+  as `"fs"`, that reads/writes sectors through `storage_ata` and serves
+  files to its own clients.
 - **shell** -- a minimal interactive shell: reads a line via
   `console_server`'s input protocol, then dispatches `read <file>`/
-  `run <file>` against `fs_fat32` and the `SYS_SPAWN_FROM_MEMORY` syscall
-  -- the first thing in this project you can actually type a command
-  into.
+  `edit <file>`/`run <file>` against `fs_fat32`, the console's raw
+  single-keystroke mode, and the `SYS_SPAWN_FROM_MEMORY` syscall --
+  `edit` is a real full-screen text editor with arrow-key navigation.
 - **libpcern** -- the shared `no_std` syscall/protocol bindings every
   program above links against.
 - **cap_test** -- regression fixtures for the capability/IPC mechanisms
   (transfer, badging, revocation, shared-memory grants) and end-to-end
-  clients that exercise the storage, filesystem, and console-input
-  protocols. Not part of a normal boot; see [Testing](#testing) below.
+  clients that exercise the storage, filesystem, console-input (line and
+  raw), and full-screen-editor protocols. Not part of a normal boot; see
+  [Testing](#testing) below.
 
 Each has its own README under `userland/<name>/README.md` with the wire
 protocol and design notes specific to it.
@@ -122,13 +123,17 @@ proves.
 This is also what CI (`.github/workflows/ci.yml`) runs on every push and
 pull request against `main`.
 
-`make test` also runs `make test-keyboard`: a third kernel build
-(`--features keyboard_test`, `grub-keytest.cfg`) that boots just
-`cap_test`'s `console_input_test` fixture in its own isolated QEMU
-invocation with a monitor socket, and drives it with *real* PS/2
-keystrokes via QEMU's monitor `sendkey` command rather than a synthetic
-in-process byte -- see `run_console_input_test.sh` and
-`userland/cap_test/README.md` for how synchronization works.
+`make test` also runs `make test-keyboard`, `make test-raw-input`, and
+`make test-editor`: three more standalone kernel builds
+(`--features keyboard_test`/`raw_input_test`/`editor_test`, their own
+`grub-*test.cfg`s) that each boot a single `cap_test` fixture
+(`console_input_test`, `raw_input_test`, `editor_input_test`) in its own
+isolated QEMU invocation with a monitor socket, driving it with *real*
+PS/2 keystrokes via QEMU's monitor `sendkey` command rather than a
+synthetic in-process byte -- see `run_console_input_test.sh`/
+`run_raw_input_test.sh`/`run_editor_test.sh` and
+`userland/cap_test/README.md` for how synchronization works and what
+each one proves.
 
 ## Releases
 
@@ -148,8 +153,12 @@ testdata/                   small fixed input files for the FAT32 test image
 grub.cfg                    production boot config
 grub-test.cfg               test-harness boot config (make test only)
 grub-keytest.cfg            keyboard-input test boot config (make test-keyboard only)
+grub-rawtest.cfg            raw-input test boot config (make test-raw-input only)
+grub-editortest.cfg         editor test boot config (make test-editor only)
 run_tests.sh                the test harness's pass/fail checker
 run_console_input_test.sh   the keyboard-input test's pass/fail checker
+run_raw_input_test.sh       the raw-input test's pass/fail checker
+run_editor_test.sh          the editor test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
 CHANGELOG.md                release history (Keep a Changelog format)
@@ -157,11 +166,12 @@ CHANGELOG.md                release history (Keep a Changelog format)
 
 ## Status
 
-pCern is a research/learning project, not a production OS. Its FAT32
-support is read-only, its storage driver only handles a single client at a
-time, and there's no networking, no SMP, no persistence beyond what's
-described above. See [CHANGELOG.md](CHANGELOG.md) for what's actually been
-built so far.
+pCern is a research/learning project, not a production OS. Its storage
+driver and filesystem server only handle a single client at a time, its
+full-screen editor caps a file at 64 KiB and has no scrolling viewport for
+longer content, and there's no networking, no SMP, no persistence beyond
+what's described above. See [CHANGELOG.md](CHANGELOG.md) for what's
+actually been built so far.
 
 ## License
 

@@ -90,6 +90,34 @@ handling. Bytes typed once the accumulator reaches `CONSOLE_LINE_MAX`
 (256) are dropped, not buffered -- not an error, just not accumulated;
 they're still echoed to the screen.
 
+## Raw single-keystroke mode (Phase 7, Checkpoint R)
+
+Layered onto the exact same reader connection as line mode above, not a
+second one:
+
+```
+send(console_slot, CONSOLE_OP_SET_MODE, w1 = 1, 0, 0)   // 0 switches back to line mode
+send(console_slot, CONSOLE_OP_READ_KEY, 0, 0, 0)
+key = recv(reader_slot).w0   // 0..=255 = plain ASCII, >= 256 = a KEY_* constant
+```
+
+While in raw mode, keystrokes are neither echoed nor accumulated into a
+line -- a raw-mode client (the shell's full-screen editor) redraws the
+screen itself via the ANSI cursor-addressing escapes already described
+above. Keys decoded before the reader's next `CONSOLE_OP_READ_KEY` are
+queued (32 deep) rather than dropped: a raw-mode redraw's cost scales
+with how much has been typed so far (the whole buffer is reprinted every
+keystroke -- see `libpcern::editor::Editor::redraw`), so several
+keystrokes arriving while one redraw is still in flight is an expected
+case, not a rare race the way a single held-back key would be enough
+for.
+
+`keyboard.rs`'s scancode decoding gained Ctrl-state tracking (mirroring
+Shift) and `0xE0`-prefixed extended-key decoding (arrows, Home/End/
+Delete/PageUp/PageDown) to support this -- see its own doc comment for
+the tagged `u32` return value and the `KEY_*` constants (mirrored in
+`libpcern` for clients).
+
 ## Why this is a userspace task at all
 
 Before Checkpoint D, the kernel itself decoded scancodes and wrote

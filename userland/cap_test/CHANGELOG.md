@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+### Added
+
+- `storage_client_test` extended (Phase 7, Checkpoint P) to write a known
+  pattern to the last LBA of the test image (far past anything
+  `test-fat32-image` allocates) and read it back, proving
+  `storage_ata`'s new write path round-trips -- still run standalone
+  (temporarily wired in for verification, then reverted), same as before.
+- `fs_client_test` extended (Checkpoint Q) to create a new file, write
+  enough to force a FAT chain-extension, overwrite a middle byte range,
+  and read the whole thing back -- reusing its existing `fs_fat32`
+  connection rather than a separate fixture, since `fs_fat32` only
+  supports one client connection at a time.
+- `raw_input_test` (Checkpoint R): exercises `console_server`'s new raw
+  single-keystroke mode -- a plain key, an extended (arrow) key, and a
+  Ctrl-chord, each via real `sendkey` injection -- in its own standalone
+  `raw_input_test` kernel build/boot config, same reasoning as
+  `console_input_test`'s.
+- `editor_input_test` (Checkpoint S): drives `libpcern::editor::Editor`
+  directly (the exact type `shell`'s `edit` command uses) through a
+  scripted real-keystroke edit session (type, navigate, insert,
+  backspace, save with Ctrl-S), then reopens and reads the file back via
+  `fs_fat32`'s normal read path to confirm the save reached disk. Its own
+  standalone `editor_test` kernel build/boot config (needs the shared
+  FAT32 test image attached, unlike `console_input_test`/
+  `raw_input_test`).
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

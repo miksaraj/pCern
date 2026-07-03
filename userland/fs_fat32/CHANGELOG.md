@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-03
+
+### Added
+
+- Write support (Phase 7, Checkpoint Q): overwrite, growth past a file's
+  current cluster span (free-cluster allocation + FAT chain extension),
+  and brand-new file creation, all through one `FS_OP_WRITE` op
+  (mirroring `FS_OP_READ`'s shape/partial-transfer contract) plus a
+  "create if missing" flag folded into `FS_OP_OPEN_NAME2`'s
+  previously-unused `w2`. Every FAT32 entry update now mirrors both FAT
+  copies (unlike the read side, which deliberately only ever consults the
+  first); newly allocated file-data clusters are left unzeroed (bounded
+  by the directory entry's own size field), but newly allocated
+  root-directory clusters are zero-filled, since directory-walking scans
+  raw bytes with no separate size field to bound it.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release (Checkpoint J).

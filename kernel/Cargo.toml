@@ -1,0 +1,46 @@
+[package]
+name = "pcern"
+version = "0.4.0"
+edition = "2021"
+
+[[bin]]
+name = "pcern"
+path = "src/main.rs"
+
+[features]
+# Spawns the cap_test fixtures (capability transfer/revocation, shared
+# memory grants, storage/fs protocols) alongside the normal service set
+# -- see `make test` and src/main.rs's test_harness_spawn. Never enabled
+# for a production boot (grub.cfg's module list wouldn't match what this
+# expects); grub-test.cfg is the one that does.
+test_harness = []
+# Spawns only console_input_test (see userland/cap_test) alongside the
+# normal service set, in place of test_harness's fixtures and the two
+# endless-print kernel tasks -- see `make test-keyboard` and
+# src/main.rs's keyboard_test_spawn. Its own standalone boot
+# configuration (grub-keytest.cfg) because this is the one fixture that
+# blocks on real external `sendkey` input rather than completing on its
+# own.
+keyboard_test = []
+# Spawns only raw_input_test (see userland/cap_test), Phase 7 Checkpoint
+# R's regression fixture for console_server's new raw single-keystroke
+# mode -- its own standalone boot configuration (grub-rawtest.cfg), same
+# reason as keyboard_test: it blocks on real external `sendkey` input, and
+# it would otherwise contend with console_input_test for the single
+# reader_owner role if folded into that build. See `make test-raw-input`
+# and src/main.rs's raw_input_test_spawn.
+raw_input_test = []
+# Spawns only editor_input_test (see userland/cap_test), Phase 7
+# Checkpoint S's regression fixture for the full-screen editor -- its own
+# standalone boot configuration (grub-editortest.cfg), same reason as the
+# other *_test features above. See `make test-editor` and src/main.rs's
+# editor_test_spawn.
+editor_test = []
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true

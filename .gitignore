@@ -5,6 +5,8 @@
 iso
 iso-test
 iso-keytest
+iso-rawtest
+iso-editortest
 *.iso
 *.o
 *.elf
@@ -13,14 +15,14 @@ iso-keytest
 *.qcow2
 
 # Rust build artifacts
-/target
-userland/console_server/target
+/kernel/target
+userland/drivers/console_server/target
 userland/cap_test/target
-userland/nameservice/target
-userland/storage_ata/target
-userland/fs_fat32/target
+userland/services/nameservice/target
+userland/drivers/storage_ata/target
+userland/services/fs_fat32/target
 userland/libpcern/target
-userland/shell/target
+userland/bin/shell/target
 
 # Assembled userland test binaries
 userland/*.bin

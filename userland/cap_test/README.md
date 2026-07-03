@@ -15,8 +15,8 @@ human debug a failure, not to decide one.
 
 ## Fixtures
 
-Each pair below is spawned together by `src/main.rs`'s
-`test_harness_spawn` in the kernel, with a hand-wired capability to its
+Each pair below is spawned together by `kernel/src/main.rs`'s
+`test_harness_spawn`, with a hand-wired capability to its
 specific partner at CSlot 3 (there's no name to look a specific test
 pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
 
@@ -40,8 +40,8 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   uses without needing a second disk. **Not spawned by `make test`** --
   `storage_ata` only supports one client at a time, and `fs_fat32` is
   already a standing one; run this fixture standalone (temporarily wire it
-  into `main.rs`/`grub.cfg` in place of `fs_fat32`, the way earlier
-  checkpoints verified it) if you need to test `storage_ata` in isolation.
+  into `kernel/src/main.rs`/`kernel/grub.cfg` in place of `fs_fat32`) if
+  you need to test `storage_ata` in isolation.
 - **`fs_client_test`** -- exercises `fs_fat32`'s real protocol end to end:
   looks up `"fs"`, opens a small single-sector file and a larger
   multi-cluster one from the generated test image (`/testdata`), and
@@ -51,6 +51,12 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   through this same connection, exercising `SYS_SPAWN_FROM_MEMORY`
   end to end -- a *second* fixture connecting to `fs_fat32` concurrently
   would clobber this one's, since it only supports one client at a time.
+  Also exercises write support here, for the same single-client reason:
+  creates a new file, writes enough to force a FAT chain-extension,
+  overwrites a middle byte range, and reads the whole
+  thing back byte-for-byte -- `run_tests.sh` additionally reads that file
+  back out of the disk image directly via `mtools` after QEMU exits,
+  independent of anything `fs_fat32` itself believes.
 - **`loaded_program`** -- not spawned directly; the tiniest possible
   ring-3 program (it just calls `exit(42)`), objcopy'd and dropped onto
   the test FAT32 image as `LOADED.BIN` by `make test-fat32-image`.
@@ -72,6 +78,25 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   *gate*, not the pass/fail signal -- that's still the exit code) before
   calling `sendkey`, and checks the result the same way as every other
   fixture.
+- **`raw_input_test`** -- exercises `console_server`'s raw single-keystroke
+  mode
+  (`CONSOLE_OP_SET_MODE`/`READ_KEY`) the same way `console_input_test`
+  exercises line mode: real `sendkey` injection of a plain key, an
+  extended (arrow) key, and a Ctrl-chord, asserting each decodes to the
+  expected tagged value. Its own standalone build (`--features
+  raw_input_test`, `grub-rawtest.cfg`, `make test-raw-input`) -- would
+  otherwise race `console_input_test` for the single `reader_owner` role.
+- **`editor_input_test`** -- drives `libpcern::editor::Editor` directly
+  (the exact type `shell`'s `edit`
+  command uses, not a re-implementation) through a scripted real-keystroke
+  edit session via `sendkey`: type a string, move the cursor with arrows,
+  insert and backspace, save with Ctrl-S. Reopens and reads the file back
+  through `fs_fat32`'s normal read path afterward, independent of
+  anything the `Editor` itself still holds in memory, to confirm the save
+  actually reached disk. Its own standalone build (`--features
+  editor_test`, `grub-editortest.cfg`, `make test-editor`) -- needs the
+  shared FAT32 test image attached, unlike `console_input_test`/
+  `raw_input_test`, since it exercises real `fs_fat32` writes.
 
 ## Adding a new fixture
 

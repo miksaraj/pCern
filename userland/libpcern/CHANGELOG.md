@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+### Added
+
+- `storage_write_block`/`STORAGE_OP_WRITE_BLOCK`.
+- `fs_open_for_write`/`fs_write`/`FS_OP_WRITE`, and a "create if missing"
+  flag on `fs_open_impl`'s `OPEN_NAME2` call -- `fs_open`'s own behavior
+  is unchanged.
+- `console_set_mode`/`console_read_key`/`CONSOLE_OP_SET_MODE`/
+  `CONSOLE_OP_READ_KEY`, and the tagged `KEY_UP`/`KEY_DOWN`/`KEY_LEFT`/
+  `KEY_RIGHT`/`KEY_HOME`/`KEY_END`/`KEY_DELETE`/`KEY_PAGE_UP`/
+  `KEY_PAGE_DOWN` constants, mirroring `console_server::keyboard`'s
+  values exactly since they cross the wire.
+- A new `editor` module: `Editor`, a full-screen text editor's core logic
+  (cursor-tracked buffer, key application, ANSI redraw), shared between
+  `userland/bin/shell`'s `edit` command and `userland/cap_test`'s
+  `editor_input_test` regression fixture.
+- `fs_truncate`/`FS_OP_TRUNCATE`: the only way a file's size shrinks --
+  `fs_write` remains grow-or-overwrite-only by design (a single write's
+  coverage is never a safe basis for inferring a shrink, since a write in
+  the middle of a file must never truncate what comes after it). Refuses
+  to grow past the file's current size, for the same reason `fs_write`
+  refuses a write whose offset is past the current size (see Fixed below)
+  -- neither op will expose a range of bytes nothing actually wrote.
+
+### Fixed
+
+- `fs_write` accepted an `offset` arbitrarily far past a file's current
+  size, silently allocating (but never zero-filling) every intervening
+  cluster and publishing the whole gap as valid content -- a client could
+  read back stale, previously-deleted data through it. `fs_fat32` now
+  refuses (`w0 = 0`) any `offset` beyond the file's current size; see its
+  own CHANGELOG for the enforcement.
+- `editor::Editor::append_loaded` silently truncated content past
+  `EDITOR_MAX_BYTES` with no way for the caller to tell. Now returns
+  `bool` (`false` the instant `data` doesn't fully fit) so a caller can
+  detect and report truncation instead of silently proceeding as if the
+  whole file had loaded.
+- `editor::Editor` had no way to reuse an already-allocated instance --
+  every construction called `mem_alloc` for a fresh 64 KiB buffer, and
+  since this project has no syscall to free one, a caller reconstructing
+  an `Editor` per use (as `shell`'s `edit` command did) leaked 64 KiB of
+  physical frames every time. Added `Editor::reset()`, which clears the
+  buffer's length/cursor without touching its already-mapped pages, so a
+  long-lived `Editor` can be reused indefinitely instead.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added
@@ -21,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-07-02
 
 Initial release. Extracted from `console_server`'s own syscall bindings
-(Checkpoint E) as the shared `no_std` crate every userland program now
-depends on, and grown alongside every phase since:
+as the shared `no_std` crate every userland program now depends on, and
+grown alongside the rest of the project since:
 
 ### Added
 
@@ -41,7 +87,7 @@ depends on, and grown alongside every phase since:
 
 - The original trampoline wrote the syscall result through `edi` *after*
   `int 0x80`, clobbering `edi` before it could be stored once `edi` became
-  a real output register (the transferred-capability slot, Checkpoint E).
-  Fixed by using `ebp` as the post-syscall scratch pointer instead, since
+  a real output register (the transferred-capability slot). Fixed by
+  using `ebp` as the post-syscall scratch pointer instead, since
   `ebp`'s original value is preserved on the stack across the call
   regardless of what's in the register in between.

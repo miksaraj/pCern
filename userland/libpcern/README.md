@@ -16,16 +16,24 @@ of its own.
   `register_irq`, `map_memory`, `mem_alloc`, `create_task`,
   `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
   `spawn_from_memory`) -- one function per syscall, matching the
-  numbers/argument registers in the kernel's `src/syscall.rs`.
+  numbers/argument registers in `kernel/src/syscall.rs`.
 - **Name-service helpers** (`lookup_name`, `lookup_name_retry`,
-  `register_name`, `pack_name`) -- see `userland/nameservice/README.md`
+  `register_name`, `pack_name`) -- see `userland/services/nameservice/README.md`
   for the wire protocol these implement.
-- **Storage-service helpers** (`storage_connect`, `storage_read_block`) --
-  see `userland/storage_ata/README.md`.
-- **Filesystem-service helpers** (`fs_connect`, `fs_open`, `fs_read`,
-  `fat_pack_name`) -- see `userland/fs_fat32/README.md`.
-- **Console-input helpers** (`console_connect`, `console_read_line`) --
-  see `userland/console_server/README.md`'s line-input protocol section.
+- **Storage-service helpers** (`storage_connect`, `storage_read_block`,
+  `storage_write_block`) -- see `userland/drivers/storage_ata/README.md`.
+- **Filesystem-service helpers** (`fs_connect`, `fs_open`,
+  `fs_open_for_write`, `fs_read`, `fs_write`, `fs_truncate`,
+  `fat_pack_name`) -- see `userland/services/fs_fat32/README.md`.
+- **Console-input helpers** (`console_connect`, `console_read_line`,
+  `console_set_mode`, `console_read_key`) -- see
+  `userland/drivers/console_server/README.md`'s line-input and raw-mode protocol
+  sections.
+- **`editor` module** (`editor::Editor`) -- a full-screen text editor's
+  core logic (cursor-tracked buffer, key application, ANSI redraw),
+  shared between `userland/bin/shell`'s `edit` command and
+  `userland/cap_test`'s `editor_input_test` regression fixture so the
+  exact code that ships is the exact code that fixture exercises.
 
 ## The `int 0x80` trampoline lives in hand-written assembly
 

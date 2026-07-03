@@ -14,6 +14,8 @@
 
 #![no_std]
 
+pub mod editor;
+
 use core::arch::global_asm;
 
 global_asm!(include_str!("syscall_asm.s"));
@@ -49,12 +51,12 @@ pub const KERNEL_TASK_ID: u32 = 0;
 /// implicitly inherit fds 0/1/2.
 pub const NAMESERVICE_SLOT: u32 = 1;
 
-/// Name-service wire protocol (see userland/nameservice): `w0`=op,
+/// Name-service wire protocol (see userland/services/nameservice): `w0`=op,
 /// `w1`/`w2`=an 8-byte name packed via `pack_name`.
 pub const NS_OP_REGISTER: u32 = 1;
 pub const NS_OP_LOOKUP: u32 = 2;
 
-/// Storage-service wire protocol (see userland/storage_ata). A client
+/// Storage-service wire protocol (see userland/drivers/storage_ata). A client
 /// connects once (`storage_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for the driver to read sectors into, and its
 /// own inbox as the reply-to address, since the 3-word/1-transfer budget
@@ -65,6 +67,10 @@ pub const NS_OP_LOOKUP: u32 = 2;
 pub const STORAGE_OP_SET_BUFFER: u32 = 1;
 pub const STORAGE_OP_SET_REPLY: u32 = 2;
 pub const STORAGE_OP_READ_BLOCK: u32 = 3;
+/// Writes the sector at `w1` from the shared buffer established by
+/// `STORAGE_OP_SET_BUFFER` (Phase 7, Checkpoint P). Same reply shape as
+/// `STORAGE_OP_READ_BLOCK`: `w0` = 1 ok / 0 failed.
+pub const STORAGE_OP_WRITE_BLOCK: u32 = 4;
 pub const STORAGE_SECTOR_SIZE: usize = 512;
 
 /// Establishes a connection to the storage service: hands it the shared
@@ -86,7 +92,16 @@ pub fn storage_read_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bo
     recv(my_inbox_slot).w0 == 1
 }
 
-/// Filesystem-service wire protocol (see userland/fs_fat32). Setup mirrors
+/// Writes sector `lba` from the shared buffer previously established by
+/// `storage_connect` (the caller fills the buffer's bytes locally first).
+/// Returns `true` on success.
+#[allow(dead_code)]
+pub fn storage_write_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bool {
+    send(storage_slot, STORAGE_OP_WRITE_BLOCK, lba, 0, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
+/// Filesystem-service wire protocol (see userland/services/fs_fat32). Setup mirrors
 /// storage's (`fs_connect`, same SET_BUFFER/SET_REPLY two-message pattern
 /// for the same reason -- one transfer per message). Opening a file needs
 /// an 11-byte fixed-width 8.3 name (see `fat_pack_name`), one byte more
@@ -98,8 +113,38 @@ pub fn storage_read_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bo
 pub const FS_OP_SET_BUFFER: u32 = 1;
 pub const FS_OP_SET_REPLY: u32 = 2;
 pub const FS_OP_OPEN_NAME1: u32 = 3;
+/// `w2` (Phase 7, Checkpoint Q) is a "create if missing" flag: 0 = open
+/// existing only (the original, unchanged behavior -- every existing
+/// caller passes 0 via `fs_open`), 1 = open existing or create a fresh
+/// zero-length file. Reply is unchanged: `w0`=opened flag, `w1`=size (0
+/// for a brand-new file).
 pub const FS_OP_OPEN_NAME2: u32 = 4;
 pub const FS_OP_READ: u32 = 5;
+/// Writes `w2` bytes at offset `w1` from the shared buffer into the
+/// currently open file -- same partial-transfer contract as `FS_OP_READ`
+/// (never crosses a sector boundary, caller loops). `offset` (`w1`) must
+/// not exceed the file's current size -- a write can extend the file by
+/// exactly what it writes (sequential append) or land inside the existing
+/// range (overwrite), but never open a gap past the current end; a
+/// gap would sit on newly-allocated, never-written (and therefore never
+/// zero-filled) clusters, which would then read back as whatever old data
+/// happens to occupy them. Reply `w0` = bytes actually written (0 = no
+/// file open, buffer not mapped, offset beyond the current size, or the
+/// disk is out of free clusters).
+pub const FS_OP_WRITE: u32 = 6;
+/// Sets the currently open file's recorded size to `w1`, persisted to its
+/// directory entry immediately. Only ever shrinks -- `w1` greater than the
+/// file's current size is refused (reply `w0` = 0) rather than growing it,
+/// since nothing here can guarantee the newly-exposed range was actually
+/// written (that's exactly the gap `FS_OP_WRITE`'s offset bound above
+/// exists to prevent). This is the only way to shrink a file: `FS_OP_WRITE`
+/// itself is grow-or-overwrite-only, by design -- inferring a shrink from
+/// a single write call's coverage would be wrong the moment that write
+/// isn't a full-file rewrite (e.g. a write in the middle of a file must
+/// never truncate whatever comes after it). Reply `w0` = 1 on success, 0
+/// if `w1` exceeds the current size, no file is open, or the dirent
+/// update fails.
+pub const FS_OP_TRUNCATE: u32 = 7;
 
 /// Packs `name` (e.g. `b"HELLO.TXT"`) into FAT's fixed 11-byte 8.3 form:
 /// up to 8 bytes before the `.` uppercased and space-padded, then up to 3
@@ -131,22 +176,34 @@ pub fn fs_connect(fs_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
     send(fs_slot, FS_OP_SET_REPLY, 0, 0, my_inbox_slot);
 }
 
-/// Opens `name` (e.g. `b"HELLO.TXT"`) as the filesystem service's one
-/// current file. Returns the file's size in bytes if found.
-#[allow(dead_code)]
-pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+fn fs_open_impl(fs_slot: u32, my_inbox_slot: u32, name: &[u8], create: bool) -> Option<u32> {
     let packed = fat_pack_name(name);
     let w1 = u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]);
     let w2 = u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]);
     send(fs_slot, FS_OP_OPEN_NAME1, w1, w2, 0);
     let w1b = u32::from_le_bytes([packed[8], packed[9], packed[10], 0]);
-    send(fs_slot, FS_OP_OPEN_NAME2, w1b, 0, 0);
+    send(fs_slot, FS_OP_OPEN_NAME2, w1b, if create { 1 } else { 0 }, 0);
     let r = recv(my_inbox_slot);
     if r.w0 == 1 {
         Some(r.w1)
     } else {
         None
     }
+}
+
+/// Opens `name` (e.g. `b"HELLO.TXT"`) as the filesystem service's one
+/// current file. Returns the file's size in bytes if found.
+#[allow(dead_code)]
+pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+    fs_open_impl(fs_slot, my_inbox_slot, name, false)
+}
+
+/// Opens `name` for writing: same as `fs_open`, but creates a fresh
+/// zero-length file if it doesn't already exist (Phase 7, Checkpoint Q).
+/// Returns the file's current size (0 for a brand-new file).
+#[allow(dead_code)]
+pub fn fs_open_for_write(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+    fs_open_impl(fs_slot, my_inbox_slot, name, true)
 }
 
 /// Reads up to `len` bytes at `offset` from the currently open file into
@@ -160,7 +217,34 @@ pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
     recv(my_inbox_slot).w0
 }
 
-/// Console *input* wire protocol (see userland/console_server). A reader
+/// Writes `len` bytes at `offset` from the shared buffer (the caller
+/// fills it locally first) into the currently open file, growing it if
+/// `offset + len` exceeds its current size. Returns the number of bytes
+/// actually written (0 = no file open, buffer not mapped, or the disk is
+/// out of free clusters) -- same partial-transfer contract as `fs_read`.
+#[allow(dead_code)]
+pub fn fs_write(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
+    send(fs_slot, FS_OP_WRITE, offset, len, 0);
+    recv(my_inbox_slot).w0
+}
+
+/// Sets the currently open file's size to exactly `new_size`, shrinking it
+/// if the file was previously longer. The one way to shrink a file -- see
+/// `FS_OP_TRUNCATE`'s doc comment for why `fs_write` can't do this itself.
+/// A caller doing a full-buffer save (write the whole new content from
+/// offset 0, then truncate to the new content's exact length) should call
+/// this every time, even when nothing was written (an edit that deletes
+/// everything down to zero bytes has no `fs_write` call to make, but still
+/// needs the old, longer content truncated away). Returns `true` on
+/// success, `false` if `new_size` exceeds the file's current size, no file
+/// is open, or the update fails to persist.
+#[allow(dead_code)]
+pub fn fs_truncate(fs_slot: u32, my_inbox_slot: u32, new_size: u32) -> bool {
+    send(fs_slot, FS_OP_TRUNCATE, new_size, 0, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
+/// Console *input* wire protocol (see userland/drivers/console_server). A reader
 /// connects once (`console_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
 /// line's bytes into, and its own dedicated line-ready endpoint (never
@@ -192,11 +276,39 @@ pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
 pub const CONSOLE_OP_SET_BUFFER: u32 = 1;
 pub const CONSOLE_OP_SET_READER: u32 = 2;
 pub const CONSOLE_OP_READ_LINE: u32 = 3;
+/// Switches the connection between line mode (`w1`=0, the default -- a
+/// complete Enter-terminated line at a time, unchanged from Checkpoint L)
+/// and raw mode (`w1`=1: every decoded key delivered immediately via
+/// `CONSOLE_OP_READ_KEY`, no echo, no line accumulation). Phase 7,
+/// Checkpoint R, for the full-screen editor -- gated by the same
+/// `reader_owner` ownership check as every other `CONSOLE_OP_*`.
+pub const CONSOLE_OP_SET_MODE: u32 = 4;
+/// Requests the next decoded key while in raw mode; the reply's `w0` is a
+/// tagged value (see `console_server::keyboard`'s `KEY_*` constants for
+/// the `>= 256` non-ASCII ones, plain ASCII otherwise). Keys decoded
+/// before this request arrives are queued (32 deep) rather than dropped
+/// -- a raw-mode redraw's cost scales with how much has been typed so far
+/// (see `editor::Editor::redraw`), so several keystrokes arriving while
+/// one redraw is still in flight is an expected case, not a rare race.
+pub const CONSOLE_OP_READ_KEY: u32 = 5;
 
 /// Bytes typed before Enter beyond this are dropped (not buffered, and
 /// not an error) -- bounded well under the shared page's 4096-byte
 /// capacity for headroom; see console_server's own accumulator.
 pub const CONSOLE_LINE_MAX: usize = 256;
+
+/// Tagged non-ASCII key values a `CONSOLE_OP_READ_KEY` reply's `w0` can
+/// carry -- must match `console_server::keyboard`'s `KEY_*` constants
+/// exactly, since they're the same values crossing the wire.
+pub const KEY_UP: u32 = 256;
+pub const KEY_DOWN: u32 = 257;
+pub const KEY_LEFT: u32 = 258;
+pub const KEY_RIGHT: u32 = 259;
+pub const KEY_HOME: u32 = 260;
+pub const KEY_END: u32 = 261;
+pub const KEY_DELETE: u32 = 262;
+pub const KEY_PAGE_UP: u32 = 263;
+pub const KEY_PAGE_DOWN: u32 = 264;
 
 /// Establishes a connection to console_server's line-input protocol, same
 /// shape as `storage_connect`/`fs_connect`.
@@ -216,9 +328,26 @@ pub fn console_read_line(console_slot: u32, reader_slot: u32) -> u32 {
     recv(reader_slot).w0
 }
 
+/// Switches the connection's input mode (`raw` = true selects raw
+/// single-keystroke mode). Must already be connected via
+/// `console_connect`.
+#[allow(dead_code)]
+pub fn console_set_mode(console_slot: u32, raw: bool) {
+    send(console_slot, CONSOLE_OP_SET_MODE, if raw { 1 } else { 0 }, 0, 0);
+}
+
+/// Requests and blocks for the next decoded key while in raw mode.
+/// Returns the tagged key value (plain ASCII `0..=255`, or one of the
+/// `KEY_*` constants for a non-ASCII key).
+#[allow(dead_code)]
+pub fn console_read_key(console_slot: u32, reader_slot: u32) -> u32 {
+    send(console_slot, CONSOLE_OP_READ_KEY, 0, 0, 0);
+    recv(reader_slot).w0
+}
+
 /// Wire protocol other tasks use to reach the screen: `send(console_slot,
 /// OP_PUTCHAR, byte, 0, 0)`, one call per character -- see
-/// userland/console_server's own README for the full protocol.
+/// userland/drivers/console_server's own README for the full protocol.
 pub const OP_PUTCHAR: u32 = 0;
 
 /// Sends `s` to `console_slot` one byte at a time via `OP_PUTCHAR`. Used

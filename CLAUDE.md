@@ -279,9 +279,10 @@ number that isn't really any single crate's.
   has always done it) -- this tracks that one component's own API/ABI/
   protocol stability.
 - **ZephyrLite**, the OS as a whole, is versioned separately:
-  `YY.MM[-{alpha|beta}].N` or `YY.MM-rcN` (e.g. `26.07.1`, `26.08-beta.2`,
-  `26.09-rc1`), tracked in the root `VERSION` file and `CHANGELOG.md`, and
-  is what a GitHub release's tag actually names. This is deliberately not
+  `YY.MM[-{alpha|beta}].N` or `YY.MM-rcN` (e.g. `26.07-alpha.1`, `26.08.1`,
+  `26.09-beta.2`, `26.10-rc1`), tracked in the root `VERSION` file and
+  `CHANGELOG.md`, and is what a GitHub release's tag actually names. This
+  is deliberately not
   SemVer: SemVer's whole point is signaling breaking-vs-compatible changes
   across a versioned *interface*, and there isn't one at the OS level yet
   (one interactive user, one boot configuration, nothing external
@@ -294,7 +295,7 @@ number that isn't really any single crate's.
   meaning "the Nth release today", which isn't what it means anywhere
   else.
 
-A ZephyrLite release bumping (say `26.07.1` -> `26.07.2`) does **not**
+A ZephyrLite release bumping (say `26.07-alpha.1` -> `26.07-alpha.2`) does **not**
 imply any crate's own version changed, and a crate bumping its own SemVer
 does not by itself justify a new ZephyrLite release -- the two are
 tracked, decided, and bumped independently. When both are changing in the

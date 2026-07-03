@@ -112,6 +112,14 @@ keystrokes arriving while one redraw is still in flight is an expected
 case, not a rare race the way a single held-back key would be enough
 for.
 
+Every `CONSOLE_OP_SET_MODE` clears both modes' pending-input state (the
+raw-mode key queue and the line-mode accumulator alike), not just
+whichever one is being left -- otherwise keystrokes still queued at the
+moment a client switches modes (e.g. typed just as one `edit` session
+ends) would silently reappear as the first input the *next* session
+sees, since the reader connection stays latched to the same client for
+the whole boot and is reused across separate sessions.
+
 `keyboard.rs`'s scancode decoding gained Ctrl-state tracking (mirroring
 Shift) and `0xE0`-prefixed extended-key decoding (arrows, Home/End/
 Delete/PageUp/PageDown) to support this -- see its own doc comment for

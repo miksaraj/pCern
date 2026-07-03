@@ -27,8 +27,15 @@ const MY_INBOX: u32 = 1;
 const MAX_ENTRIES: usize = 8;
 
 /// (kernel-attested task id, name) pairs allowed to register that name.
-/// Task ids are fixed by main.rs's spawn order: 1 = nameservice itself,
-/// 2 = console_server, 3 = storage_ata, 4 = fs_fat32.
+/// Task ids are fixed by kernel/src/main.rs's spawn order: 1 = nameservice
+/// itself, 2 = console_server, 3 = storage_ata, 4 = fs_fat32. This is a
+/// different crate/binary/address space from the kernel, so there's no
+/// shared constant to enforce the correspondence at compile time -- but
+/// kernel/src/main.rs asserts (a real `assert!`, not `debug_assert!`, since
+/// this must hold in the shipped release binary) that each of these three
+/// tasks actually lands at the id this table expects, right after spawning
+/// it, so a spawn-order change that would silently break this table
+/// instead panics loudly at boot.
 const ALLOWLIST: &[(u32, [u8; 8])] = &[(2, *b"console\0"), (3, *b"storage\0"), (4, *b"fs\0\0\0\0\0\0")];
 
 #[derive(Clone, Copy)]

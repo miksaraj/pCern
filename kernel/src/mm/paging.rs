@@ -6,7 +6,14 @@ extern "C" {
     static mut boot_page_directory: [u32; 1024];
 }
 
-const KERNEL_VMA: usize = 0xC000_0000;
+/// Where the kernel's own higher half begins. Every task's page directory
+/// shares this and everything above it verbatim (see `PageDirectory::new`'s
+/// copy loop) -- no syscall that maps memory into a *task's own* address
+/// space (`SYS_MAP_MEMORY`, `SYS_MEM_ALLOC`) may ever target a `virt_addr`
+/// at or above this: those callers must reject such a request themselves,
+/// since `map_page` has no way to tell "this task's syscall" apart from
+/// "trusted kernel setup code" once it's called.
+pub const KERNEL_VMA: usize = 0xC000_0000;
 const KERNEL_VMA_PDE_INDEX: usize = KERNEL_VMA >> 22; // 768
 
 pub const PHYS_MAP_BASE: usize = 0xE000_0000;
@@ -16,6 +23,7 @@ const PAGE_PRESENT_RW_4M: u32 = 0x83; // present | read-write | page-size(4M)
 const PAGE_PRESENT: u32 = 1 << 0;
 const PAGE_WRITABLE: u32 = 1 << 1;
 const PAGE_USER: u32 = 1 << 2;
+const PAGE_PS: u32 = 1 << 7; // page size: 1 = this PDE is itself a 4 MiB mapping, not a page-table pointer
 const PAGE_ADDR_MASK: u32 = 0xFFFF_F000;
 
 /// Extends the boot bootstrap page directory with enough 4 MiB PSE entries
@@ -134,6 +142,20 @@ impl PageDirectory {
         let table = phys_to_virt(self.phys_frame) as *mut u32;
         unsafe {
             let pde = *table.add(pd_index);
+            // A present PDE with PS set is itself a 4 MiB mapping (e.g. the
+            // kernel's own higher half or the physmap window), not a
+            // page-table pointer -- `pde & PAGE_ADDR_MASK` below would not
+            // be a page-table's physical address, and unconditionally OR-ing
+            // PAGE_USER onto it (the branch just past this check) would make
+            // that entire 4 MiB region user-accessible in one step, not just
+            // the single page this call is trying to map. No legitimate
+            // caller should ever reach this: every syscall that lets a task
+            // choose its own `virt_addr` (SYS_MAP_MEMORY, SYS_MEM_ALLOC)
+            // rejects anything at or above KERNEL_VMA before calling here.
+            assert!(
+                pde & PAGE_PRESENT == 0 || pde & PAGE_PS == 0,
+                "map_page: refusing to remap a large (PSE) page directory entry at index {pd_index}"
+            );
             let pt_phys = if pde & PAGE_PRESENT != 0 {
                 // The CPU ANDs the PDE's and PTE's user bits together, so a
                 // PDE left at kernel-only (because an earlier mapping in

@@ -121,11 +121,30 @@ pub const FS_OP_OPEN_NAME1: u32 = 3;
 pub const FS_OP_OPEN_NAME2: u32 = 4;
 pub const FS_OP_READ: u32 = 5;
 /// Writes `w2` bytes at offset `w1` from the shared buffer into the
-/// currently open file (Phase 7, Checkpoint Q) -- same partial-transfer
-/// contract as `FS_OP_READ` (never crosses a sector boundary, caller
-/// loops). Reply `w0` = bytes actually written (0 = no file open, buffer
-/// not mapped, or the disk is out of free clusters).
+/// currently open file -- same partial-transfer contract as `FS_OP_READ`
+/// (never crosses a sector boundary, caller loops). `offset` (`w1`) must
+/// not exceed the file's current size -- a write can extend the file by
+/// exactly what it writes (sequential append) or land inside the existing
+/// range (overwrite), but never open a gap past the current end; a
+/// gap would sit on newly-allocated, never-written (and therefore never
+/// zero-filled) clusters, which would then read back as whatever old data
+/// happens to occupy them. Reply `w0` = bytes actually written (0 = no
+/// file open, buffer not mapped, offset beyond the current size, or the
+/// disk is out of free clusters).
 pub const FS_OP_WRITE: u32 = 6;
+/// Sets the currently open file's recorded size to `w1`, persisted to its
+/// directory entry immediately. Only ever shrinks -- `w1` greater than the
+/// file's current size is refused (reply `w0` = 0) rather than growing it,
+/// since nothing here can guarantee the newly-exposed range was actually
+/// written (that's exactly the gap `FS_OP_WRITE`'s offset bound above
+/// exists to prevent). This is the only way to shrink a file: `FS_OP_WRITE`
+/// itself is grow-or-overwrite-only, by design -- inferring a shrink from
+/// a single write call's coverage would be wrong the moment that write
+/// isn't a full-file rewrite (e.g. a write in the middle of a file must
+/// never truncate whatever comes after it). Reply `w0` = 1 on success, 0
+/// if `w1` exceeds the current size, no file is open, or the dirent
+/// update fails.
+pub const FS_OP_TRUNCATE: u32 = 7;
 
 /// Packs `name` (e.g. `b"HELLO.TXT"`) into FAT's fixed 11-byte 8.3 form:
 /// up to 8 bytes before the `.` uppercased and space-padded, then up to 3
@@ -207,6 +226,22 @@ pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
 pub fn fs_write(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
     send(fs_slot, FS_OP_WRITE, offset, len, 0);
     recv(my_inbox_slot).w0
+}
+
+/// Sets the currently open file's size to exactly `new_size`, shrinking it
+/// if the file was previously longer. The one way to shrink a file -- see
+/// `FS_OP_TRUNCATE`'s doc comment for why `fs_write` can't do this itself.
+/// A caller doing a full-buffer save (write the whole new content from
+/// offset 0, then truncate to the new content's exact length) should call
+/// this every time, even when nothing was written (an edit that deletes
+/// everything down to zero bytes has no `fs_write` call to make, but still
+/// needs the old, longer content truncated away). Returns `true` on
+/// success, `false` if `new_size` exceeds the file's current size, no file
+/// is open, or the update fails to persist.
+#[allow(dead_code)]
+pub fn fs_truncate(fs_slot: u32, my_inbox_slot: u32, new_size: u32) -> bool {
+    send(fs_slot, FS_OP_TRUNCATE, new_size, 0, 0);
+    recv(my_inbox_slot).w0 == 1
 }
 
 /// Console *input* wire protocol (see userland/drivers/console_server). A reader

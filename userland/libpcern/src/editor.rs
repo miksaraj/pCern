@@ -17,6 +17,16 @@
 //! revisitable scope decision like that cap, not a hard ceiling: growing
 //! it later is "call `mem_alloc` more times."
 //!
+//! There is no syscall to free a `mem_alloc`'d page anywhere in this
+//! project, so a caller that called `Editor::new` fresh on every `edit`
+//! invocation would permanently leak `EDITOR_MAX_BYTES` of physical frames
+//! per invocation (the old mapping is simply overwritten, not reclaimed).
+//! The intended usage is: call `Editor::new` exactly once (e.g. at shell
+//! startup) and call `reset()` on that same instance for every subsequent
+//! invocation instead of constructing a new one -- `reset()` just clears
+//! the in-memory length/cursor without touching the already-mapped pages,
+//! so nothing is ever allocated twice.
+//!
 //! Redraws the whole buffer from the top of the screen on every change
 //! via ansi.rs's existing CUP (`ESC[row;colH`) and ED (`ESC[2J`) escapes,
 //! already supported on the console's *output* side before this
@@ -63,6 +73,17 @@ impl Editor {
         Some(Editor { buf_base: base, len: 0, cursor: 0 })
     }
 
+    /// Resets the buffer to empty without touching its already-mapped
+    /// pages, so one `Editor` can be reused across multiple `edit`
+    /// invocations in the same task instead of allocating a fresh one
+    /// every time -- see the module doc comment for why that matters
+    /// (there's no way to free a `mem_alloc`'d page in this project, so
+    /// allocating fresh pages per invocation would leak them).
+    pub fn reset(&mut self) {
+        self.len = 0;
+        self.cursor = 0;
+    }
+
     fn buf(&self) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.buf_base as *const u8, EDITOR_MAX_BYTES) }
     }
@@ -80,14 +101,20 @@ impl Editor {
     }
 
     /// Appends `data` at the current end of the buffer (used while
-    /// loading a file's existing content one sector at a time). Silently
-    /// truncates at `EDITOR_MAX_BYTES` -- see the module doc comment.
-    pub fn append_loaded(&mut self, data: &[u8]) {
+    /// loading a file's existing content one sector at a time). Truncates
+    /// at `EDITOR_MAX_BYTES` -- see the module doc comment -- but, unlike
+    /// before, says so: returns `false` the moment `data` doesn't fully
+    /// fit, so the caller can stop the load loop and warn the user rather
+    /// than silently continuing as if the whole file had been loaded (a
+    /// save afterward would otherwise truncate the on-disk file to match
+    /// the in-memory buffer with no indication anything was cut).
+    pub fn append_loaded(&mut self, data: &[u8]) -> bool {
         let room = EDITOR_MAX_BYTES - self.len;
         let n = data.len().min(room);
         let start = self.len;
         self.buf_mut()[start..start + n].copy_from_slice(&data[..n]);
         self.len += n;
+        n == data.len()
     }
 
     fn line_start(&self, pos: usize) -> usize {

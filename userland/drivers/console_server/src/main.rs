@@ -272,6 +272,30 @@ pub extern "C" fn _start() -> ! {
                     // only the latched reader can flip modes.
                     if reader_owner == r.sender {
                         raw_mode = r.w1 != 0;
+                        // Clear every bit of not-yet-delivered input state
+                        // from *both* modes on every transition, not just
+                        // whichever one is being left: a client that
+                        // switches modes (e.g. finishing one `edit` session
+                        // and returning to the shell prompt) is declaring
+                        // "whatever's pending from before is no longer
+                        // relevant" -- otherwise keystrokes still sitting in
+                        // `key_queue`, or a completed-but-undelivered line,
+                        // would silently reappear as the first input the
+                        // *next* session sees, misattributed to whatever it
+                        // does next. `armed`/`key_armed` can never
+                        // legitimately be true here regardless: reaching
+                        // this arm means the owner's `send` for this very
+                        // op just completed, and a still-outstanding
+                        // `CONSOLE_OP_READ_LINE`/`READ_KEY` would have that
+                        // same single-threaded client still blocked in
+                        // `recv`, unable to have sent this at all -- so
+                        // resetting them here is purely defensive.
+                        key_queue_head = 0;
+                        key_queue_len = 0;
+                        key_armed = false;
+                        line_len = 0;
+                        line_ready = false;
+                        armed = false;
                     }
                 }
                 libpcern::CONSOLE_OP_READ_KEY => {

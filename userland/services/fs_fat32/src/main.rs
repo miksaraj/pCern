@@ -18,12 +18,20 @@
 //! zero-filled: `read_file`'s bounds check already refuses to expose any
 //! byte beyond the directory entry's recorded size, so leftover disk
 //! garbage in an unwritten tail is never observable through `FS_OP_READ`
-//! regardless of zeroing. Newly allocated *root-directory* clusters are
-//! the one exception and ARE zero-filled (see `grow_root_for_free_slot`):
-//! unlike file data, directory-walking scans raw bytes looking for a
-//! `0x00`/`0xE5` marker with no separately-tracked size to bound it, so
-//! unzeroed garbage there could be misread as a real (or falsely
-//! terminating) directory entry.
+//! regardless of zeroing -- **as long as `size` only ever grows to cover a
+//! contiguous range starting from what was already written**, which is
+//! exactly what `write_file` enforces by refusing (`offset > file.size`)
+//! any write that would leave a gap of never-written clusters standing in
+//! for real content. Shrinking is deliberately not inferred from a write's
+//! own coverage (a write in the middle of a file must never truncate
+//! whatever comes after it) -- `FS_OP_TRUNCATE`/`truncate_file` is the only
+//! way a file's size decreases, and it in turn refuses to *grow* past the
+//! current size, for the same never-expose-unwritten-bytes reason.
+//! Newly allocated *root-directory* clusters are the one exception and ARE
+//! zero-filled (see `grow_root_for_free_slot`): unlike file data,
+//! directory-walking scans raw bytes looking for a `0x00`/`0xE5` marker
+//! with no separately-tracked size to bound it, so unzeroed garbage there
+//! could be misread as a real (or falsely terminating) directory entry.
 //!
 //! Scope for v1 (deliberately narrow, matching this phase's other
 //! scope-narrowing calls): root-directory files only, no subdirectory
@@ -404,11 +412,25 @@ fn read_file(bpb: &Bpb, storage_slot: u32, storage_reply: u32, file: &OpenFile, 
 }
 
 /// Writes up to one sector's worth of `client_buf()` bytes at `offset`
-/// into `file`, allocating/extending its cluster chain as needed
-/// (Checkpoint Q) and persisting the resulting size/first-cluster to its
-/// directory entry. Returns the number of bytes actually written (`0` =
-/// the disk ran out of free clusters, or a sector read/write failed).
+/// into `file`, allocating/extending its cluster chain as needed and
+/// persisting the resulting size/first-cluster to its directory entry.
+/// Returns the number of bytes actually written (`0` = `offset` is beyond
+/// the file's current size, the disk ran out of free clusters, or a
+/// sector read/write failed).
 fn write_file(bpb: &Bpb, storage_slot: u32, storage_reply: u32, file: &mut OpenFile, offset: u32, len: u32) -> u32 {
+    // `offset` may never exceed the current size: a write starting past
+    // the end would leave a gap of newly-allocated-but-never-written
+    // clusters standing in for it, and those clusters are deliberately not
+    // zero-filled (see the module doc comment) -- exposing whatever old
+    // data already occupies them the moment `file.size` grows to cover
+    // that gap. Refusing any offset beyond the current end keeps every
+    // byte between 0 and the new size something this call (or an earlier
+    // one) actually wrote. A legitimate caller either overwrites within
+    // the existing range (offset < file.size) or appends immediately at
+    // the end (offset == file.size); it never needs to skip ahead.
+    if offset > file.size {
+        return 0;
+    }
     let cluster_size = bpb.cluster_size_bytes();
     let cluster_index = offset / cluster_size;
     let offset_in_cluster = offset % cluster_size;
@@ -467,6 +489,25 @@ fn write_file(bpb: &Bpb, storage_slot: u32, storage_reply: u32, file: &mut OpenF
         return 0;
     }
     n as u32
+}
+
+/// Shrinks `file`'s recorded size to `new_size`, persisting the change to
+/// its directory entry. The only way a file's size ever decreases --
+/// `write_file` is grow-or-overwrite-only by design (see its own doc
+/// comment). Refuses (returns `0`) to grow past the current size: nothing
+/// here can guarantee bytes between the old and new size were actually
+/// written, and exposing them anyway would reopen the same gap
+/// `write_file`'s own offset bound exists to prevent. Returns `1` on
+/// success.
+fn truncate_file(storage_slot: u32, storage_reply: u32, file: &mut OpenFile, new_size: u32) -> u32 {
+    if new_size > file.size {
+        return 0;
+    }
+    file.size = new_size;
+    if !write_dirent_update(storage_slot, storage_reply, file.dirent, file.start_cluster, file.size) {
+        return 0;
+    }
+    1
 }
 
 #[no_mangle]
@@ -572,6 +613,16 @@ pub extern "C" fn _start() -> ! {
                     None => 0,
                 };
                 libpcern::send(client_reply, n, 0, 0, 0);
+            }
+            libpcern::FS_OP_TRUNCATE => {
+                if client_reply == 0 {
+                    continue;
+                }
+                let ok = match &mut open_file {
+                    Some(file) => truncate_file(storage_slot, storage_reply, file, r.w1),
+                    None => 0,
+                };
+                libpcern::send(client_reply, ok, 0, 0, 0);
             }
             _ => {}
         }

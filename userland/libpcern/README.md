@@ -23,8 +23,8 @@ of its own.
 - **Storage-service helpers** (`storage_connect`, `storage_read_block`,
   `storage_write_block`) -- see `userland/drivers/storage_ata/README.md`.
 - **Filesystem-service helpers** (`fs_connect`, `fs_open`,
-  `fs_open_for_write`, `fs_read`, `fs_write`, `fat_pack_name`) -- see
-  `userland/services/fs_fat32/README.md`.
+  `fs_open_for_write`, `fs_read`, `fs_write`, `fs_truncate`,
+  `fat_pack_name`) -- see `userland/services/fs_fat32/README.md`.
 - **Console-input helpers** (`console_connect`, `console_read_line`,
   `console_set_mode`, `console_read_key`) -- see
   `userland/drivers/console_server/README.md`'s line-input and raw-mode protocol

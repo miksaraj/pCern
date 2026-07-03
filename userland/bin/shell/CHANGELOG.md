@@ -23,6 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The actual editor logic lives in `libpcern::editor::Editor`, shared
   with a `cap_test` regression fixture.
 
+### Fixed
+
+- `edit <file>` allocated a fresh `libpcern::editor::Editor` (and its
+  64 KiB backing buffer) on every invocation, permanently leaking it
+  since this project has no syscall to free a `mem_alloc`'d page. The
+  editor is now allocated exactly once at shell startup and reset
+  (`Editor::reset()`) for each subsequent `edit` command instead.
+- Saving never shrank the file to match the edited content -- deleting
+  text (down to and including emptying the buffer entirely) and saving
+  left the old, longer content's tail on disk, in the empty-buffer case
+  because the save loop has nothing to write at all yet still reported
+  "saved". `edit` now calls the new `fs_truncate` unconditionally after
+  saving (even when nothing was written) to set the file's size to
+  exactly what's now in the buffer.
+- Loading a file larger than the editor's 64 KiB cap silently truncated
+  it with no indication to the user; saving afterward would then persist
+  only the truncated content with no warning. Now prints an explicit
+  warning when a load is truncated.
+
 ## [0.1.0] - 2026-07-03
 
 Initial release.

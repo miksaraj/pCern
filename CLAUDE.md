@@ -45,6 +45,22 @@ also sidesteps a real limitation of this system: multiple tasks printing
 through the console server at once interleave byte-for-byte, so console
 text is unreliable as a signal the moment more than one thing is running.
 
+### Rebuilding and testing is for code changes, not documentation
+
+The full clean rebuild + headless boot + interrupt-trace verification
+above exists to catch code-level regressions -- it has nothing to check
+when a change is confined to `.md` files (READMEs, CHANGELOGs, this file
+included). Running `make clean && make test` (or even just `make iso`)
+after a documentation-only edit burns real compute and wall-clock time to
+reconfirm something that's already known: nothing built differently,
+nothing behaves differently, because nothing that affects a build changed.
+Check `git status`/`git diff` first -- if every changed path is a `.md`
+file, skip the rebuild entirely, no matter how much surrounding code that
+documentation happens to describe. This isn't a relaxation of the
+methodology above; it's the same principle (verify what could have
+actually broken) applied correctly: a rebuild only tells you something
+when the inputs to the build changed.
+
 ### Temporary verification wiring
 
 Multiboot module indices and task IDs are fixed by `main.rs`'s spawn order

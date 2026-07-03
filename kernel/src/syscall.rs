@@ -245,6 +245,18 @@ fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize, writable: bool
     if phys_addr % mm::frame::FRAME_SIZE != 0 || virt_addr % mm::frame::FRAME_SIZE != 0 || len == 0 {
         return ERR;
     }
+    // virt_addr is entirely caller-chosen -- reject anything that would
+    // reach the kernel's own higher half (shared, verbatim, across every
+    // task's page directory; see PageDirectory::new). Without this, a task
+    // could target e.g. the physmap window and map_page would find an
+    // existing 4 MiB PSE mapping already there, which is the caller's own
+    // page directory but not a page range this call is allowed to touch.
+    let Some(virt_end) = virt_addr.checked_add(len) else {
+        return ERR;
+    };
+    if virt_end > mm::paging::KERNEL_VMA {
+        return ERR;
+    }
     let mut page_dir = mm::paging::PageDirectory::from_phys(scheduler::current_page_dir_phys());
     let pages = len.div_ceil(mm::frame::FRAME_SIZE);
     for i in 0..pages {
@@ -261,7 +273,9 @@ fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize, writable: bool
 /// separate error channel here) if `virt_addr` isn't page-aligned or
 /// allocation fails.
 fn sys_mem_alloc(virt_addr: usize) -> u32 {
-    if virt_addr % mm::frame::FRAME_SIZE != 0 {
+    // Same reasoning as sys_map_memory: virt_addr is entirely caller-chosen
+    // and must not reach the kernel's own higher half.
+    if virt_addr % mm::frame::FRAME_SIZE != 0 || virt_addr >= mm::paging::KERNEL_VMA {
         return 0;
     }
     let Some(phys) = mm::frame::alloc_frame() else {

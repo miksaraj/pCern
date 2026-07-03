@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Ctrl-A=0x01..Ctrl-Z=0x1A) via the existing lookup table rather than a
   second one.
 
+### Fixed
+
+- `CONSOLE_OP_SET_MODE` flipped `raw_mode` without clearing either mode's
+  not-yet-delivered input state (`key_queue`/`key_queue_len`/`key_armed`
+  for raw mode, `line_len`/`line_ready`/`armed` for line mode). Since the
+  reader connection is latched for the whole boot and reused across
+  separate sessions (e.g. `shell`'s `edit` command run more than once),
+  keystrokes left queued at one mode transition could silently reappear
+  as the first input the *next* session saw. Every transition now clears
+  both modes' pending state unconditionally.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

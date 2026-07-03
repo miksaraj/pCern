@@ -60,11 +60,26 @@ length) mirrors `FS_OP_READ`'s shape and partial-transfer contract
 exactly, writing from the shared buffer and growing the file (allocating
 new clusters as needed) whenever the write's end offset exceeds the
 current size; the reply's `w0` is the number of bytes actually written
-(`0` = no file open, buffer not mapped, or the disk is out of free
-clusters).
+(`0` = no file open, buffer not mapped, `offset` is beyond the file's
+current size, or the disk is out of free clusters). `offset` may never
+exceed the file's current size -- a write either overwrites within the
+existing range or appends immediately at the end, never opening a gap of
+never-written (and therefore never zero-filled) clusters that would read
+back as stale leftover data.
+
+`FS_OP_TRUNCATE` (`w1` = new size) sets the currently open file's size
+explicitly; reply `w0` = `1` on success, `0` if `w1` exceeds the current
+size (it only ever shrinks) or no file is open. This is the only way a
+file's size decreases -- `FS_OP_WRITE` is grow-or-overwrite-only by
+design, since inferring a shrink from one write's coverage would be wrong
+the instant that write isn't a full-file rewrite. A client doing a
+full-buffer save (the shell's `edit` command) writes the new content from
+offset 0, then calls this with the new content's exact length -- even
+when nothing was written, since an edit that empties a file entirely
+still needs the old, longer content truncated away.
 
 See `userland/libpcern`'s `fs_connect`/`fs_open`/`fs_open_for_write`/
-`fs_read`/`fs_write` for the client-side helpers, and
+`fs_read`/`fs_write`/`fs_truncate` for the client-side helpers, and
 `userland/cap_test/src/bin/fs_client_test.rs` for a complete example
 client (including the write/overwrite/readback exercise).
 

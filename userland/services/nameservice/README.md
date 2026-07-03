@@ -45,4 +45,8 @@ free -- so a compile-time `(task ID, name)` allowlist gets the same
 security property (only the real storage driver can claim `"storage"`)
 with one less kernel primitive. Adding a new trusted service means adding
 one line to `ALLOWLIST` and keeping it in sync with `main.rs`'s spawn
-order (documented in the comment above the list).
+order (documented in the comment above the list) -- `main.rs` asserts
+(a real, not debug-only, assertion) that each trusted service actually
+lands at the task id this table expects, right after spawning it, so a
+future spawn-order change that would silently break this correspondence
+panics loudly at boot instead.

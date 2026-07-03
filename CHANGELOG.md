@@ -51,6 +51,31 @@ The first ZephyrLite release.
   file creation) and in the ATA/IDE disk driver, and a new raw
   single-keystroke input mode in the console driver.
 
+### Security
+
+- A ring-3 task holding nothing more than a memory grant it could obtain
+  for free could reach virtual addresses reserved for the kernel and gain
+  ordinary read/write access to physical memory well beyond what it was
+  ever granted, up to and including all of it -- a complete bypass of the
+  capability model this OS is built around. Fixed at the syscall boundary
+  (an out-of-range address is now rejected outright) with a second,
+  independent check inside the kernel's own page-mapping code as a
+  backstop. See `kernel/CHANGELOG.md` for the technical detail.
+
+### Fixed
+
+- Saving an edited file could leave stale old content on disk past the
+  end of what was actually saved (most noticeably: deleting a file's
+  text down to nothing and saving didn't actually empty it), and a file
+  larger than the editor's 64 KiB limit was truncated on load with no
+  warning. Both are now handled correctly and, in the second case,
+  reported to the user.
+- Repeatedly using `edit` in one session leaked memory (no way to free
+  what a previous `edit` had allocated); it's now reused instead.
+- Switching the console between typed-line and full-screen-editor input
+  modes could leave keystrokes queued from one `edit` session bleeding
+  into the next one.
+
 ### Changed
 
 - The kernel moved from the repo root into `kernel/` (its own `Cargo.toml`,

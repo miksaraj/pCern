@@ -46,6 +46,13 @@ of write support all the way down the storage stack.
   the three additions above. The editor's core logic lives in a new
   `libpcern::editor` module, shared with a `cap_test` regression fixture
   so the exact code that ships is the exact code that fixture exercises.
+- `assert_eq!` checks (not `debug_assert_eq!` -- these must hold in the
+  shipped release binary) right after spawning `console_server`/
+  `storage_ata`/`fs_fat32` confirming each lands at the task id
+  `nameservice`'s registration `ALLOWLIST` hardcodes it to. A spawn-order
+  change that broke this correspondence would otherwise either silently
+  break name registration or let the wrong task claim a trusted name; it
+  now panics loudly at boot instead.
 
 ### Fixed
 
@@ -61,6 +68,25 @@ of write support all the way down the storage stack.
   absorbed by its echo/accumulate path instead of reaching the editor.
   Fixed by switching to raw mode as the very first thing the command
   does.
+
+### Security
+
+- `sys_map_memory`/`sys_mem_alloc` accepted any caller-chosen `virt_addr`
+  with no upper bound, and `PageDirectory::map_page` treated any present
+  PDE it found there as a page-table pointer regardless of whether it was
+  actually a 4 MiB PSE mapping. Since every task's page directory shares
+  the kernel's own higher-half and physical-memory-linear-map PDEs
+  verbatim (both PSE), an unprivileged task holding nothing more than a
+  `MemoryGrant` it got for free via `SYS_MEM_ALLOC` could call
+  `SYS_MAP_MEMORY` with a `virt_addr` landing in either range and flip
+  `PAGE_USER` on the whole 4 MiB entry -- gaining ordinary read/write
+  access to that much real physical memory, and by repeating this across
+  the physmap's PDE range, to all of it. Fixed in two layers: both
+  syscalls now reject any `virt_addr` (or range, for `sys_map_memory`) at
+  or above `KERNEL_VMA`, and `map_page` itself now asserts (a real
+  `assert!`, checked in release builds) that it's never asked to remap a
+  PDE with the PS bit set, as a hard backstop against any future caller
+  making the same mistake.
 
 ## [0.3.0] - 2026-07-03
 

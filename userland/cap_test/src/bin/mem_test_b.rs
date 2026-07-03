@@ -44,6 +44,34 @@ pub extern "C" fn _start() -> ! {
         libpcern::exit(1);
     }
 
+    // Two denial-path regressions a code review found untested: no
+    // fixture previously exercised SYS_MAP_MEMORY being refused at all
+    // (only the success path above), which is exactly the gap that let a
+    // real privilege-escalation bug (an unbounded virt_addr letting a task
+    // flip PAGE_USER on the kernel's own higher-half/physmap PDEs) go
+    // uncaught. An invalid capability slot must be rejected...
+    const BOGUS_SLOT: u32 = 99;
+    if libpcern::map_memory(BOGUS_SLOT, 0x0091_0000) == 0 {
+        print(console_slot, b"mem_test_b: FAIL (bogus slot accepted)\n");
+        libpcern::exit(1);
+    }
+    // ...and a legitimate MemoryGrant must still be refused the moment
+    // virt_addr reaches the kernel's own higher half (every task's page
+    // directory shares 0xC000_0000+ verbatim -- see
+    // kernel/src/mm/paging.rs's KERNEL_VMA and sys_map_memory's bounds
+    // check), even though the capability itself is perfectly valid.
+    const KERNEL_VMA: u32 = 0xC000_0000;
+    if libpcern::map_memory(share.transferred_slot, KERNEL_VMA) == 0 {
+        print(console_slot, b"mem_test_b: FAIL (kernel-space map accepted)\n");
+        libpcern::exit(1);
+    }
+    // Same denial-path gap existed for SYS_REGISTER_IRQ -- no fixture
+    // exercised an invalid capability slot being rejected there either.
+    if libpcern::register_irq(BOGUS_SLOT) == 0 {
+        print(console_slot, b"mem_test_b: FAIL (bogus IRQ slot accepted)\n");
+        libpcern::exit(1);
+    }
+
     let observed = unsafe { (SHARED_VIRT as *const u32).read_volatile() };
     libpcern::send(PEER_SLOT, MSG_DONE, 0, 0, 0);
 

@@ -29,16 +29,27 @@ completing while the shell is still blocked waiting on an `fs_open`/
   `fs_client_test` already exercises.
 - **`edit <file>`** -- a full-screen text editor. Opens `<file>`,
   creating a fresh zero-length one if it doesn't already exist, and
-  loads any existing content into a 16-page (64 KiB) buffer. Switches
-  the console into raw single-keystroke mode and redraws the buffer on
-  every change via the console's existing ANSI cursor-addressing
-  escapes. Supports arrow-key/Home/End/Delete/Backspace navigation and
-  editing, plain-ASCII insertion, Ctrl-S to save (via `fs_fat32`'s write
-  support) and return to the prompt, and Ctrl-Q to discard and return
-  without saving. The editor's
-  actual logic lives in `libpcern::editor::Editor` -- see that crate's
-  README for why, and `userland/cap_test/src/bin/editor_input_test.rs`
-  for the regression fixture that exercises the exact same code.
+  loads any existing content into a 16-page (64 KiB) buffer (a load
+  larger than that is truncated, with an explicit warning printed rather
+  than silently dropping the tail). Switches the console into raw
+  single-keystroke mode and redraws the buffer on every change via the
+  console's existing ANSI cursor-addressing escapes. Supports
+  arrow-key/Home/End/Delete/Backspace navigation and editing, plain-ASCII
+  insertion, Ctrl-S to save and return to the prompt, and Ctrl-Q to
+  discard and return without saving. Saving writes the buffer's full
+  content via `fs_fat32`'s write support, then calls `fs_truncate` to set
+  the file's size to exactly what's now in the buffer -- the only way a
+  save can shrink a file (e.g. after deleting text, including deleting
+  all of it), since `fs_write` on its own only ever grows or overwrites.
+  The single `libpcern::editor::Editor` this command operates on is
+  allocated once at shell startup and reused (`Editor::reset()`) for
+  every `edit` invocation afterward, rather than allocated fresh each
+  time -- there's no syscall to free a `mem_alloc`'d page in this
+  project, so a fresh allocation per invocation would leak it. The
+  editor's actual logic lives in `libpcern::editor::Editor` -- see that
+  crate's README for why, and
+  `userland/cap_test/src/bin/editor_input_test.rs` for the regression
+  fixture that exercises the exact same code.
 - **`run <file>`** -- opens `<file>`, reads it into a single
   `mem_alloc`'d page (capped at 4096 bytes -- see below), and spawns it
   via `SYS_SPAWN_FROM_MEMORY`. Prints the new task's id, or an error if

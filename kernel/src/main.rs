@@ -140,6 +140,14 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let console_id =
         loader::spawn_from_module(1, &CONSOLE_SERVER_PORTS).expect("no multiboot module 1 found for 'console_server'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'console_server' (id={})", console_id);
+    // A real (not debug-only) assert: nameservice's own registration
+    // ALLOWLIST (userland/services/nameservice/src/main.rs) hardcodes this
+    // exact task id to the "console" name, with nothing else tying the two
+    // files together. A silent mismatch here (e.g. from a reordered spawn
+    // sequence) would either wrongly reject console_server's own
+    // registration, or let whatever task now holds id 2 register "console"
+    // in its place -- panicking loudly at boot is far preferable to either.
+    assert_eq!(console_id, 2, "nameservice's ALLOWLIST assumes console_server is task id 2");
     let console_endpoint = ipc::create_endpoint(console_id);
     let console_inbox_slot = grant_endpoint_cap(console_id, console_endpoint);
     debug_assert_eq!(console_inbox_slot, 2, "console_server's own inbox must land at CSlot 2");
@@ -168,6 +176,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let storage_id =
         loader::spawn_from_module(2, &STORAGE_ATA_PORTS).expect("no multiboot module 2 found for 'storage_ata'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'storage_ata' (id={})", storage_id);
+    // See the identical assert on console_id above -- nameservice's
+    // ALLOWLIST hardcodes this task id to "storage".
+    assert_eq!(storage_id, 3, "nameservice's ALLOWLIST assumes storage_ata is task id 3");
     let storage_endpoint = ipc::create_endpoint(storage_id);
     grant_endpoint_cap(storage_id, storage_endpoint); // storage_ata's CSlot 2: its own inbox
 
@@ -176,6 +187,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // service) a server to whatever looks up "fs".
     let fs_id = loader::spawn_from_module(3, &[]).expect("no multiboot module 3 found for 'fs_fat32'");
     println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'fs_fat32' (id={})", fs_id);
+    // See the identical assert on console_id above -- nameservice's
+    // ALLOWLIST hardcodes this task id to "fs".
+    assert_eq!(fs_id, 4, "nameservice's ALLOWLIST assumes fs_fat32 is task id 4");
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 

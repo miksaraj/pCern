@@ -32,6 +32,7 @@
 mod editor;
 
 use core::panic::PanicInfo;
+use libpcern::editor::Editor;
 use libpcern::{print, print_u32};
 
 /// CSlot 1 is the name service (auto-granted). CSlot 2 is this task's own
@@ -165,6 +166,13 @@ pub extern "C" fn _start() -> ! {
     let reader_slot = libpcern::endpoint_create();
     libpcern::console_connect(console_slot, console_grant, reader_slot);
 
+    // Allocated exactly once, here, and reused (via `Editor::reset`) for
+    // every `edit` invocation this session -- see `libpcern::editor`'s
+    // module doc comment for why: there's no syscall to free a
+    // `mem_alloc`'d page in this project, so calling `Editor::new` fresh
+    // per invocation would leak its 64 KiB every time `edit` is typed.
+    let mut editor = Editor::new(EDITOR_BUF_VIRT);
+
     print(console_slot, b"pCern shell -- type 'help' for commands\n> ");
 
     loop {
@@ -176,15 +184,10 @@ pub extern "C" fn _start() -> ! {
             b"help" => print_help(console_slot),
             b"read" => cmd_read(console_slot, fs_slot, argument),
             b"run" => cmd_run(console_slot, fs_slot, run_grant, argument),
-            b"edit" => editor::run(
-                console_slot,
-                reader_slot,
-                MY_INBOX,
-                fs_slot,
-                FS_BUF_VIRT,
-                EDITOR_BUF_VIRT,
-                argument,
-            ),
+            b"edit" => match &mut editor {
+                Some(ed) => editor::run(console_slot, reader_slot, MY_INBOX, fs_slot, FS_BUF_VIRT, ed, argument),
+                None => print(console_slot, b"edit: unavailable (alloc failed at startup)\n"),
+            },
             b"" => {}
             _ => {
                 print(console_slot, b"unknown command: ");

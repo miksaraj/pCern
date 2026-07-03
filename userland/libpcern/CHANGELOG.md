@@ -24,6 +24,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (cursor-tracked buffer, key application, ANSI redraw), shared between
   `userland/bin/shell`'s `edit` command and `userland/cap_test`'s
   `editor_input_test` regression fixture.
+- `fs_truncate`/`FS_OP_TRUNCATE`: the only way a file's size shrinks --
+  `fs_write` remains grow-or-overwrite-only by design (a single write's
+  coverage is never a safe basis for inferring a shrink, since a write in
+  the middle of a file must never truncate what comes after it). Refuses
+  to grow past the file's current size, for the same reason `fs_write`
+  refuses a write whose offset is past the current size (see Fixed below)
+  -- neither op will expose a range of bytes nothing actually wrote.
+
+### Fixed
+
+- `fs_write` accepted an `offset` arbitrarily far past a file's current
+  size, silently allocating (but never zero-filling) every intervening
+  cluster and publishing the whole gap as valid content -- a client could
+  read back stale, previously-deleted data through it. `fs_fat32` now
+  refuses (`w0 = 0`) any `offset` beyond the file's current size; see its
+  own CHANGELOG for the enforcement.
+- `editor::Editor::append_loaded` silently truncated content past
+  `EDITOR_MAX_BYTES` with no way for the caller to tell. Now returns
+  `bool` (`false` the instant `data` doesn't fully fit) so a caller can
+  detect and report truncation instead of silently proceeding as if the
+  whole file had loaded.
+- `editor::Editor` had no way to reuse an already-allocated instance --
+  every construction called `mem_alloc` for a fresh 64 KiB buffer, and
+  since this project has no syscall to free one, a caller reconstructing
+  an `Editor` per use (as `shell`'s `edit` command did) leaked 64 KiB of
+  physical frames every time. Added `Editor::reset()`, which clears the
+  buffer's length/cursor without touching its already-mapped pages, so a
+  long-lived `Editor` can be reused indefinitely instead.
 
 ## [0.2.0] - 2026-07-03
 

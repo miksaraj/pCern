@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standalone `editor_test` kernel build/boot config (needs the shared
   FAT32 test image attached, unlike `console_input_test`/
   `raw_input_test`).
+- `mem_test_b` extended to cover two previously-untested denial paths a
+  code review flagged: `SYS_MAP_MEMORY` with an invalid capability slot,
+  `SYS_MAP_MEMORY` with a legitimate `MemoryGrant` but a `virt_addr`
+  reaching the kernel's own higher half, and `SYS_REGISTER_IRQ` with an
+  invalid slot -- all three must now be (and are) rejected. The second
+  case is a direct regression test for a real privilege-escalation bug
+  this same review found and the kernel fixed (see its CHANGELOG).
 
 ## [0.2.0] - 2026-07-03
 

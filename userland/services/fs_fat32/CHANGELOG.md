@@ -22,6 +22,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by the directory entry's own size field), but newly allocated
   root-directory clusters are zero-filled, since directory-walking scans
   raw bytes with no separate size field to bound it.
+- `FS_OP_TRUNCATE`/`truncate_file`: sets the currently open file's size
+  explicitly, but only ever shrinks it -- see `libpcern`'s changelog for
+  the client-side rationale. The only way a file's size decreases;
+  `write_file` remains grow-or-overwrite-only.
+
+### Fixed
+
+- `write_file` accepted any `offset`, even one far past the file's current
+  size -- allocating (but never zero-filling) every intervening cluster
+  and publishing that whole gap as valid content the moment `file.size`
+  grew to cover it, exposing whatever stale data already occupied those
+  clusters. Now refuses (`0`) any write whose `offset` exceeds the current
+  size; a legitimate caller only ever overwrites within the existing
+  range or appends immediately at the end, so this costs nothing for any
+  real usage while closing an information-disclosure path. As a side
+  effect this also bounds the cost of a single write request: a request
+  can no longer force allocation of an unbounded number of clusters in
+  one call by naming an arbitrarily large offset.
+- `write_file` only ever grew `file.size`, never shrank it -- overwriting
+  an existing file with shorter content left the old, larger size on
+  disk, so a later read exposed stale trailing bytes past what was
+  actually (re)written. Shrinking is deliberately not inferred from a
+  write's own coverage (see `FS_OP_TRUNCATE`'s doc comment for why); a
+  caller doing a full-file rewrite now calls the new `FS_OP_TRUNCATE`
+  after writing to declare the file's true final size.
 
 ## [0.1.0] - 2026-07-02
 

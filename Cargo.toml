@@ -30,6 +30,12 @@ keyboard_test = []
 # reader_owner role if folded into that build. See `make test-raw-input`
 # and src/main.rs's raw_input_test_spawn.
 raw_input_test = []
+# Spawns only editor_input_test (see userland/cap_test), Phase 7
+# Checkpoint S's regression fixture for the full-screen editor -- its own
+# standalone boot configuration (grub-editortest.cfg), same reason as the
+# other *_test features above. See `make test-editor` and src/main.rs's
+# editor_test_spawn.
+editor_test = []
 
 [profile.dev]
 panic = "abort"

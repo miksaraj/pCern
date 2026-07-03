@@ -131,10 +131,25 @@ pub extern "C" fn _start() -> ! {
     // latch above rather than a second one -- see the module doc comment.
     // `raw_mode` off (the default) leaves every line-mode behavior above
     // completely unchanged. `key_armed` mirrors `armed`'s role but for
-    // `CONSOLE_OP_READ_KEY`: the next decoded key, while raw, is delivered
-    // immediately instead of being echoed/accumulated into a line.
+    // `CONSOLE_OP_READ_KEY`. `key_queue` mirrors `line_ready`'s role too --
+    // a key decoded before the reader's next `CONSOLE_OP_READ_KEY` request
+    // is held rather than silently dropped, the same reasoning line
+    // mode's typed-ahead accumulation already documents. This one needs a
+    // real queue rather than line mode's single `line_ready` slot: a raw
+    // reader's redraw cost scales with how much has been typed so far
+    // (the whole buffer is reprinted after every key -- see
+    // libpcern::editor::Editor::redraw), so several keystrokes typed in
+    // the time one redraw takes are an expected case, not a rare race, and
+    // a single-slot buffer would overwrite (silently drop) all but the
+    // most recent of them. 32 entries is comfortably more than a human
+    // can type between two IPC round trips even under this project's
+    // slowest realistic redraw.
+    const KEY_QUEUE_CAP: usize = 32;
     let mut raw_mode = false;
     let mut key_armed = false;
+    let mut key_queue: [u32; KEY_QUEUE_CAP] = [0; KEY_QUEUE_CAP];
+    let mut key_queue_head: usize = 0;
+    let mut key_queue_len: usize = 0;
 
     loop {
         let r = libpcern::recv(MY_INBOX_SLOT);
@@ -148,7 +163,14 @@ pub extern "C" fn _start() -> ! {
                     if key_armed && reader_slot != 0 {
                         libpcern::send(reader_slot, key, 0, 0, 0);
                         key_armed = false;
+                    } else if key_queue_len < KEY_QUEUE_CAP {
+                        let idx = (key_queue_head + key_queue_len) % KEY_QUEUE_CAP;
+                        key_queue[idx] = key;
+                        key_queue_len += 1;
                     }
+                    // else: queue full (32 unclaimed keystrokes) -- drop,
+                    // same "don't buffer forever" bound as
+                    // CONSOLE_LINE_MAX has for line mode.
                     continue;
                 }
                 // Line mode only ever dealt in plain ASCII -- codes >= 256
@@ -254,7 +276,14 @@ pub extern "C" fn _start() -> ! {
                 }
                 libpcern::CONSOLE_OP_READ_KEY => {
                     if reader_owner == r.sender && reader_slot != 0 {
-                        key_armed = true;
+                        if key_queue_len > 0 {
+                            let key = key_queue[key_queue_head];
+                            key_queue_head = (key_queue_head + 1) % KEY_QUEUE_CAP;
+                            key_queue_len -= 1;
+                            libpcern::send(reader_slot, key, 0, 0, 0);
+                        } else {
+                            key_armed = true;
+                        }
                     }
                 }
                 _ => {}

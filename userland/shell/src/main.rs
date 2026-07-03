@@ -29,6 +29,8 @@
 #![no_std]
 #![no_main]
 
+mod editor;
+
 use core::panic::PanicInfo;
 use libpcern::{print, print_u32};
 
@@ -40,6 +42,10 @@ const MY_INBOX: u32 = 2;
 const CONSOLE_BUF_VIRT: u32 = 0x00D0_0000;
 const FS_BUF_VIRT: u32 = 0x00D1_0000;
 const RUN_BUF_VIRT: u32 = 0x00D2_0000;
+/// Base of the editor's 16-page (64 KiB) buffer (Checkpoint S) -- a
+/// separate, non-overlapping region from the three single-page ones
+/// above, built from consecutive `mem_alloc` calls (see editor.rs).
+const EDITOR_BUF_VIRT: u32 = 0x00D3_0000;
 const SECTOR_SIZE: u32 = 512;
 const PAGE_SIZE: u32 = 4096;
 
@@ -55,7 +61,7 @@ fn split_command(line: &[u8]) -> (&[u8], &[u8]) {
 }
 
 fn print_help(console_slot: u32) {
-    print(console_slot, b"commands: read <FILE>, run <FILE>, help\n");
+    print(console_slot, b"commands: read <FILE>, edit <FILE>, run <FILE>, help\n");
 }
 
 /// Prints a file's contents a sector at a time -- same read loop
@@ -170,6 +176,15 @@ pub extern "C" fn _start() -> ! {
             b"help" => print_help(console_slot),
             b"read" => cmd_read(console_slot, fs_slot, argument),
             b"run" => cmd_run(console_slot, fs_slot, run_grant, argument),
+            b"edit" => editor::run(
+                console_slot,
+                reader_slot,
+                MY_INBOX,
+                fs_slot,
+                FS_BUF_VIRT,
+                EDITOR_BUF_VIRT,
+                argument,
+            ),
             b"" => {}
             _ => {
                 print(console_slot, b"unknown command: ");

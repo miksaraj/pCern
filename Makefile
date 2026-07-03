@@ -78,6 +78,18 @@ BOOT_RAWTEST_PATH := $(ISO_RAWTEST_PATH)/boot
 GRUB_RAWTEST_PATH := $(BOOT_RAWTEST_PATH)/grub
 ISO_RAWTEST := pcern-rawtest-i386.iso
 
+# Phase 7, Checkpoint S's full-screen editor test harness: its own
+# standalone kernel build (--features editor_test) + grub config + ISO,
+# same reason as the other *_test harnesses above -- see
+# editor_input_test.rs's doc comment. Unlike keyboard_test/raw_input_test,
+# this one needs the shared FAT32 test image attached (it exercises real
+# fs_fat32 write support), same as the main iso-test build.
+CFG_EDITORTEST := grub-editortest.cfg
+ISO_EDITORTEST_PATH := iso-editortest
+BOOT_EDITORTEST_PATH := $(ISO_EDITORTEST_PATH)/boot
+GRUB_EDITORTEST_PATH := $(BOOT_EDITORTEST_PATH)/grub
+ISO_EDITORTEST := pcern-editortest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -143,6 +155,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/console_input_test $(USERLAND_DIR)/console_input_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/raw_input_test $(USERLAND_DIR)/raw_input_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/editor_input_test $(USERLAND_DIR)/editor_input_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
 
@@ -221,11 +235,33 @@ iso-rawtest: kernel-rawtest userland cap_test
 test-raw-input: iso-rawtest
 	./run_raw_input_test.sh $(ISO_RAWTEST)
 
+.PHONY: kernel-editortest
+kernel-editortest:
+	$(CARGO) build --$(PROFILE) --features editor_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-editortest
+iso-editortest: kernel-editortest userland cap_test
+	$(MKDIR) $(GRUB_EDITORTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_EDITORTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_EDITORTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_EDITORTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_EDITORTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_EDITORTEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/editor_input_test.bin $(BOOT_EDITORTEST_PATH)/editor_input_test.bin
+	$(CP) $(CFG_EDITORTEST) $(GRUB_EDITORTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_EDITORTEST) $(ISO_EDITORTEST_PATH)
+
+.PHONY: test-editor
+test-editor: iso-editortest test-fat32-image
+	./run_editor_test.sh $(ISO_EDITORTEST) $(TEST_FAT32_IMG)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
 	$(MAKE) test-keyboard
 	$(MAKE) test-raw-input
+	$(MAKE) test-editor
 
 .PHONY: test-fat32-image
 test-fat32-image: cap_test
@@ -249,4 +285,4 @@ clean:
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

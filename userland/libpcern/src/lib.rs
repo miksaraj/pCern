@@ -14,6 +14,8 @@
 
 #![no_std]
 
+pub mod editor;
+
 use core::arch::global_asm;
 
 global_asm!(include_str!("syscall_asm.s"));
@@ -248,7 +250,11 @@ pub const CONSOLE_OP_READ_LINE: u32 = 3;
 pub const CONSOLE_OP_SET_MODE: u32 = 4;
 /// Requests the next decoded key while in raw mode; the reply's `w0` is a
 /// tagged value (see `console_server::keyboard`'s `KEY_*` constants for
-/// the `>= 256` non-ASCII ones, plain ASCII otherwise).
+/// the `>= 256` non-ASCII ones, plain ASCII otherwise). Keys decoded
+/// before this request arrives are queued (32 deep) rather than dropped
+/// -- a raw-mode redraw's cost scales with how much has been typed so far
+/// (see `editor::Editor::redraw`), so several keystrokes arriving while
+/// one redraw is still in flight is an expected case, not a rare race.
 pub const CONSOLE_OP_READ_KEY: u32 = 5;
 
 /// Bytes typed before Enter beyond this are dropped (not buffered, and

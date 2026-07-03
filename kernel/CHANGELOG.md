@@ -20,7 +20,7 @@ historical context.
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-03
+## [0.5.0] - 2026-07-04
 
 ### Added
 

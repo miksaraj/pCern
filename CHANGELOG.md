@@ -38,6 +38,8 @@ for the full rationale behind keeping these two axes separate.
 
 ## [Unreleased]
 
+## [26.07-alpha.2] - 2026-07-04
+
 ### Added
 
 - ZephyrLite now installs to, and boots from, its own writable FAT32 disk

@@ -1,6 +1,6 @@
 [package]
 name = "pcern"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 
 [[bin]]
@@ -36,6 +36,13 @@ raw_input_test = []
 # other *_test features above. See `make test-editor` and src/main.rs's
 # editor_test_spawn.
 editor_test = []
+# Spawns only reboot_test (see userland/cap_test), Checkpoint V's
+# regression fixture for the new SYS_REBOOT syscall -- its own standalone
+# boot configuration (grub-reboottest.cfg), same reasoning as the other
+# *_test features above: it deliberately resets the machine, which would
+# tear down any other fixture running alongside it. See `make test-reboot`
+# and src/main.rs's reboot_test_spawn.
+reboot_test = []
 
 [profile.dev]
 panic = "abort"

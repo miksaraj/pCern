@@ -7,9 +7,16 @@ iso-test
 iso-keytest
 iso-rawtest
 iso-editortest
+iso-reboottest
 *.iso
 *.o
 *.elf
+
+# Checkpoint U: generated on demand via `make disk` -- not committed, same
+# reasoning as the FAT32 test image below.
+/disk-build
+/disk-fat.img
+/zephyrlite-i386.img
 
 # VM files
 *.qcow2

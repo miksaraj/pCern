@@ -21,6 +21,14 @@ compile_error!("keyboard_test and raw_input_test are mutually exclusive boot con
 compile_error!("keyboard_test and editor_test are mutually exclusive boot configurations; build one or the other, never both");
 #[cfg(all(feature = "raw_input_test", feature = "editor_test"))]
 compile_error!("raw_input_test and editor_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "test_harness", feature = "reboot_test"))]
+compile_error!("test_harness and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "keyboard_test", feature = "reboot_test"))]
+compile_error!("keyboard_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "raw_input_test", feature = "reboot_test"))]
+compile_error!("raw_input_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "editor_test", feature = "reboot_test"))]
+compile_error!("editor_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
 
 extern crate alloc;
 
@@ -42,6 +50,7 @@ mod mm;
 mod multiboot;
 mod pic;
 mod port;
+mod reboot;
 mod scheduler;
 mod serial;
 mod sync;
@@ -207,7 +216,8 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
         feature = "test_harness",
         feature = "keyboard_test",
         feature = "raw_input_test",
-        feature = "editor_test"
+        feature = "editor_test",
+        feature = "reboot_test"
     )))]
     {
         let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
@@ -227,6 +237,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "editor_test")]
     editor_test_spawn();
+
+    #[cfg(feature = "reboot_test")]
+    reboot_test_spawn();
 
     // Spawned last. Never blocks or exits, so block_current()/exit_current()
     // always have at least one task to fall back to instead of panicking
@@ -381,6 +394,39 @@ fn editor_test_spawn() {
     println!(
         "[ \x1b[1;32mok\x1b[0m ] editor_test: spawned editor_input_test (id={})",
         editor_input_test_id
+    );
+}
+
+/// Spawns `reboot_test` (see `userland/cap_test`), Checkpoint V's
+/// regression fixture for the new `SYS_REBOOT` syscall, only present in a
+/// kernel built with `--features reboot_test` (see `make test-reboot`) --
+/// `grub-reboottest.cfg` is the one grub config whose module list matches
+/// the index below. Its own standalone build/boot for the same reason as
+/// every other `*_test_spawn` here: it deliberately resets the whole
+/// machine, which would be indistinguishable from a crash to anything
+/// else sharing this boot. Granted the same direct COM1 port access as
+/// the other harnesses (to print a marker before the reset actually
+/// lands), plus -- the whole point of this fixture -- a freshly minted
+/// `RebootControl` capability at CSlot 3, following the same convention
+/// every other hand-wired hardware capability in this file uses. The real
+/// intended holder of a capability like this is a future update service
+/// (ZephyrLite's own Checkpoint Z); for now, this fixture is the only
+/// task in the whole system ever handed one.
+#[cfg(feature = "reboot_test")]
+fn reboot_test_spawn() {
+    const COM1_PORTS: [u16; 2] = [0x3F8, 0x3FD];
+    let reboot_test_id =
+        loader::spawn_from_module(4, &COM1_PORTS).expect("no multiboot module 4 found for 'reboot_test'");
+    let reboot_test_endpoint = ipc::create_endpoint(reboot_test_id);
+    grant_endpoint_cap(reboot_test_id, reboot_test_endpoint); // its CSlot 2: its own inbox
+
+    let reboot_control = cap::mint_root(cap::CapKind::RebootControl);
+    let reboot_control_slot = scheduler::install_cap_for(reboot_test_id, reboot_control);
+    debug_assert_eq!(reboot_control_slot, 3, "reboot_test's RebootControl must land at CSlot 3");
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] reboot_test: spawned reboot_test (id={})",
+        reboot_test_id
     );
 }
 

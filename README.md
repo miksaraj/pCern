@@ -68,14 +68,17 @@ You'll need:
   kept in the prerequisite list below for environments that still expect it.
 - **grub-mkrescue** and **xorriso** -- build the bootable ISO
   (`grub-common` + `grub-pc-bin` on Debian/Ubuntu).
-- **mtools** -- only needed to build the FAT32 test image (`mformat`/
-  `mcopy`); not required just to build and boot the OS.
+- **mtools** -- builds the FAT32 test image (`mformat`/`mcopy`) and the
+  installed boot disk below; not required just to build and boot the ISO.
+- **sfdisk** (`fdisk` on Debian/Ubuntu) and **mkfs.vfat** (`dosfstools`)
+  -- only needed to build the installed FAT32 boot disk (`make disk`),
+  not the ISO.
 - **qemu-system-i386** -- to actually run it.
 
 On Debian/Ubuntu:
 
 ```sh
-sudo apt-get install nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86
+sudo apt-get install nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86 dosfstools fdisk
 ```
 
 On macOS (Homebrew):
@@ -103,8 +106,26 @@ loaded alongside it, which only `make iso`/`make run` arrange, so a bare
 See [kernel/README.md](kernel/README.md) if you want to build just the
 kernel crate on its own (e.g. for a quick `cargo check`).
 
+```sh
+make disk       # builds a real, installed FAT32 boot disk: zephyrlite-i386.img
+make run-disk   # builds (if needed) and boots it in QEMU, same as `make run` but from that disk
+```
+
+Unlike `make iso`'s read-only CD image, `zephyrlite-i386.img` is a real
+disk GRUB itself boots from -- the kernel, every default userland
+service, and GRUB's own bootstrap files sit on one partitioned FAT32 disk
+as ordinary root-level files, through the exact same interface
+`fs_fat32`'s own runtime read/write protocol supports. This is the
+foundation an in-place update mechanism needs (not yet built -- see
+[CHANGELOG.md](CHANGELOG.md)); `make iso`/`make run` remain the quicker
+option for everyday development. Building the disk needs `sudo` for one
+step (`grub-bios-setup` always needs root to install itself, the same as
+a real `grub-install` on real hardware, even though the "disk" here is
+just a file); everything else in `make disk` runs unprivileged.
+
 `make clean` removes all build artifacts (including the generated `iso/`
-tree and the ISO itself) across the kernel and every userland crate.
+tree, the ISO, and the installed disk image) across the kernel and every
+userland crate.
 
 ## Testing
 
@@ -137,6 +158,17 @@ synthetic in-process byte -- see `run_console_input_test.sh`/
 `userland/cap_test/README.md` for how synchronization works and what
 each one proves.
 
+`make test` also runs `make test-reboot` (another standalone
+`--features reboot_test` kernel build; its `reboot_test` fixture prints a
+marker then calls the new `SYS_REBOOT` syscall -- `run_reboot_test.sh`
+checks the marker reached serial *and* that QEMU, booted with
+`-no-reboot`, exited on its own rather than hanging, since there's no
+exit code to check once the machine actually resets) and
+`make test-disk-boot` (builds the installed FAT32 boot disk via `make
+disk` and boots it headlessly, checking via `run_disk_boot_test.sh` that
+every service's normal startup message reached serial -- proof GRUB
+loaded every multiboot module from the disk itself, not an ISO).
+
 ## Releases
 
 Publishing a GitHub release (`.github/workflows/release.yml`, triggered on
@@ -165,6 +197,8 @@ run_tests.sh                the test harness's pass/fail checker
 run_console_input_test.sh   the keyboard-input test's pass/fail checker
 run_raw_input_test.sh       the raw-input test's pass/fail checker
 run_editor_test.sh          the editor test's pass/fail checker
+run_reboot_test.sh          the reboot-syscall test's pass/fail checker
+run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
 CHANGELOG.md                ZephyrLite (OS-level) release history

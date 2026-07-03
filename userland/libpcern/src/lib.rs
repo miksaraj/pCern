@@ -37,6 +37,7 @@ pub const SYS_CAP_MINT_BADGED: u32 = 10;
 pub const SYS_CAP_REVOKE: u32 = 11;
 pub const SYS_MEM_ALLOC: u32 = 12;
 pub const SYS_SPAWN_FROM_MEMORY: u32 = 13;
+pub const SYS_REBOOT: u32 = 14;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -589,4 +590,14 @@ pub fn cap_mint_badged(source_slot: u32, badge: u32) -> u32 {
 #[allow(dead_code)]
 pub fn cap_revoke(slot: u32) {
     unsafe { syscall_raw(SYS_CAP_REVOKE, slot, 0, 0, 0, 0) };
+}
+
+/// Resets the machine via `reboot_control_slot` (a capability slot holding
+/// a `RebootControl` -- see cap.rs in the kernel). Never returns on
+/// success; if `reboot_control_slot` doesn't resolve to a valid
+/// `RebootControl`, the syscall is rejected and this returns normally so
+/// the caller can report the failure.
+#[allow(dead_code)]
+pub fn reboot(reboot_control_slot: u32) {
+    unsafe { syscall_raw(SYS_REBOOT, reboot_control_slot, 0, 0, 0, 0) };
 }

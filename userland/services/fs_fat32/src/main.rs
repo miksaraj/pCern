@@ -41,6 +41,16 @@
 //! itself an ordinary cluster chain rooted at `root_cluster` (not a fixed
 //! region the way FAT16's root dir is), so it's walked with exactly the
 //! same `next_cluster` logic as file data.
+//!
+//! Checkpoint U adds `find_fat32_base`: the FAT32 volume this task reads
+//! and writes may now start at LBA 0 directly (the original
+//! "superfloppy" layout, still what `make test-fat32-image` builds) *or*
+//! wherever an MBR partition table's first FAT32 partition begins (the
+//! installed boot disk `make disk` builds, which needs a real partition
+//! table so GRUB's own `i386-pc` install has a gap to embed its
+//! `core.img` in). Every other function in this file is unaware of the
+//! difference -- `parse_bpb` bakes the base LBA into `fat_begin_sector`/
+//! `first_data_sector` once, up front.
 
 #![no_std]
 #![no_main]
@@ -123,13 +133,71 @@ fn write_sector(storage_slot: u32, storage_reply: u32, lba: u32) -> bool {
     libpcern::storage_write_block(storage_slot, storage_reply, lba)
 }
 
-/// Returns `None` if LBA 0 can't be read at all (no disk attached behind
-/// storage_ata -- this task stays alive but never registers "fs" rather
-/// than treating that as fatal, the same graceful-idle behavior
-/// storage_ata itself already has when nobody's asked it to do anything)
-/// or doesn't look like a valid FAT32 BPB.
-fn parse_bpb(storage_slot: u32, storage_reply: u32) -> Option<Bpb> {
+/// FAT32's own `BS_FilSysType` field: 8 bytes at offset 82 in a genuine
+/// FAT32 boot sector, conventionally `"FAT32   "`. Used below to tell a
+/// bare FAT32 boot sector at LBA 0 (the existing "superfloppy" layout
+/// `make test-fat32-image`'s image and older disks use) apart from an MBR
+/// partition table at LBA 0 (Checkpoint U's installed boot disk) -- the
+/// 0x55AA boot signature both carry at bytes 510-511 can't distinguish
+/// the two, since an MBR has that exact same signature at that exact same
+/// offset.
+const FAT32_FILESYS_TYPE: &[u8; 8] = b"FAT32   ";
+
+/// Finds the LBA where the FAT32 volume's own boot sector actually
+/// starts: `0` directly for an unpartitioned/"superfloppy" FAT32 disk, or
+/// wherever an MBR partition table's first FAT32 partition begins.
+/// Checkpoint U's installed boot disk needs a real MBR (GRUB's own
+/// `i386-pc` BIOS install embeds its `core.img` in the gap between the
+/// MBR and the first partition -- a bare FAT32 filesystem has no such
+/// gap), while the pre-existing FAT32 test image and any older
+/// unpartitioned disk still boot sector 0 directly -- both are supported
+/// here rather than picking one, so neither the test harness nor any
+/// disk built before this checkpoint needs to change.
+///
+/// Only the first partition table entry is consulted, and only if its
+/// type byte is `0x0B` (FAT32 CHS) or `0x0C` (FAT32 LBA) -- this driver
+/// has no use for, and doesn't need to understand, any other partition
+/// type or a second partition. Returns `None` if neither a direct FAT32
+/// boot sector nor a partition table entry pointing at one is found.
+fn find_fat32_base(storage_slot: u32, storage_reply: u32) -> Option<u32> {
     if !read_sector(storage_slot, storage_reply, 0) {
+        return None;
+    }
+    if &storage_buf()[82..90] == FAT32_FILESYS_TYPE {
+        return Some(0);
+    }
+
+    let b = storage_buf();
+    const PART1_OFFSET: usize = 446;
+    let part_type = b[PART1_OFFSET + 4];
+    if part_type != 0x0B && part_type != 0x0C {
+        return None;
+    }
+    let start_lba = u32::from_le_bytes([
+        b[PART1_OFFSET + 8],
+        b[PART1_OFFSET + 9],
+        b[PART1_OFFSET + 10],
+        b[PART1_OFFSET + 11],
+    ]);
+
+    if !read_sector(storage_slot, storage_reply, start_lba) {
+        return None;
+    }
+    if &storage_buf()[82..90] == FAT32_FILESYS_TYPE {
+        Some(start_lba)
+    } else {
+        None
+    }
+}
+
+/// Returns `None` if no FAT32 volume can be found at all (no disk
+/// attached behind storage_ata -- this task stays alive but never
+/// registers "fs" rather than treating that as fatal, the same
+/// graceful-idle behavior storage_ata itself already has when nobody's
+/// asked it to do anything) or doesn't look like a valid FAT32 BPB.
+fn parse_bpb(storage_slot: u32, storage_reply: u32) -> Option<Bpb> {
+    let base = find_fat32_base(storage_slot, storage_reply)?;
+    if !read_sector(storage_slot, storage_reply, base) {
         return None;
     }
     let b = storage_buf();
@@ -146,12 +214,16 @@ fn parse_bpb(storage_slot: u32, storage_reply: u32) -> Option<Bpb> {
         return None;
     }
 
+    // `total_sectors32`/the reserved+FAT area size are volume-relative
+    // (as FAT32 always records them); `base` only needs adding to the two
+    // fields below, since those are the ones later code uses as absolute
+    // LBAs passed straight to `read_sector`/`write_sector`.
     let first_data_sector = reserved_sector_count + num_fats * fat_sz32;
     let max_cluster = (total_sectors32 - first_data_sector) / sectors_per_cluster + 1;
     Some(Bpb {
         sectors_per_cluster,
-        first_data_sector,
-        fat_begin_sector: reserved_sector_count,
+        first_data_sector: base + first_data_sector,
+        fat_begin_sector: base + reserved_sector_count,
         fat_sz32,
         root_cluster,
         max_cluster,

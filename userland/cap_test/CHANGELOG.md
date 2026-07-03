@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-03
+
+### Added
+
+- `reboot_test`: exercises the new `SYS_REBOOT` syscall -- prints a
+  marker directly to serial (the same technique `raw_input_test` uses),
+  then triggers a real reset via a `RebootControl` capability hand-wired
+  at CSlot 3. Its own standalone `reboot_test` kernel build/boot config,
+  same reasoning as `raw_input_test`'s: it deliberately resets the whole
+  machine, which nothing else can run alongside. See
+  `run_reboot_test.sh`, which checks the marker reached serial *and* that
+  QEMU (booted with `-no-reboot`) exited on its own rather than hanging --
+  there's no exit code to check, since the fixture never gets to call
+  `exit`.
+
 ## [0.3.0] - 2026-07-03
 
 ### Added

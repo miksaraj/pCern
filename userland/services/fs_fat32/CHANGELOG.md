@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+### Added
+
+- `find_fat32_base`: the FAT32 volume this task reads and writes may now
+  start at LBA 0 directly (the original "superfloppy" layout, still what
+  `make test-fat32-image` builds) *or* wherever an MBR partition table's
+  first FAT32 partition (type `0x0B`/`0x0C`) begins -- distinguished by
+  FAT32's own `BS_FilSysType` field, not the 0x55AA boot signature both
+  an MBR and a bare FAT32 boot sector carry at the identical offset.
+  Needed for ZephyrLite's new installed boot disk (`make disk` at the
+  repo root), which requires a real partition table so GRUB's own
+  `i386-pc` BIOS install has a gap to embed its `core.img` in -- a bare
+  FAT32 filesystem has none. Fully backward compatible: every existing
+  unpartitioned disk/test image resolves to the same base-0 behavior as
+  before.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

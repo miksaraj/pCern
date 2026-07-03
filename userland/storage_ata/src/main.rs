@@ -10,10 +10,11 @@
 //! (`STORAGE_OP_SET_BUFFER`) and a capability to its own inbox to receive
 //! replies on (`STORAGE_OP_SET_REPLY`) -- two messages, since a single
 //! message can only carry one transfer -- then issues any number of
-//! `STORAGE_OP_READ_BLOCK` requests. Only one client at a time is
-//! supported: this phase has exactly one (`fs_fat32`), and the single
-//! rendezvous inbox this driver reads from already serializes requests,
-//! so there's nothing to arbitrate.
+//! `STORAGE_OP_READ_BLOCK`/`STORAGE_OP_WRITE_BLOCK` (Phase 7, Checkpoint P)
+//! requests. Only one client at a time is supported: this phase has
+//! exactly one (`fs_fat32`), and the single rendezvous inbox this driver
+//! reads from already serializes requests, so there's nothing to
+//! arbitrate.
 //!
 //! The disk-plumbing spike this replaced (raw LBA0 hex dump straight to
 //! the console, checked against a host-written pattern) proved the ATA
@@ -73,6 +74,22 @@ pub extern "C" fn _start() -> ! {
                 };
                 let sector: &mut [u8; ata::SECTOR_SIZE] = buf.try_into().unwrap();
                 let ok = ata::read_sector(lba, sector);
+                libpcern::send(reply_slot, if ok { 1 } else { 0 }, 0, 0, 0);
+            }
+            libpcern::STORAGE_OP_WRITE_BLOCK => {
+                if reply_slot == 0 {
+                    continue;
+                }
+                if !buf_mapped {
+                    libpcern::send(reply_slot, 0, 0, 0, 0);
+                    continue;
+                }
+                let lba = r.w1;
+                let buf = unsafe {
+                    core::slice::from_raw_parts(BUF_VIRT as *const u8, ata::SECTOR_SIZE)
+                };
+                let sector: &[u8; ata::SECTOR_SIZE] = buf.try_into().unwrap();
+                let ok = ata::write_sector(lba, sector);
                 libpcern::send(reply_slot, if ok { 1 } else { 0 }, 0, 0, 0);
             }
             _ => {}

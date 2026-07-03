@@ -65,6 +65,10 @@ pub const NS_OP_LOOKUP: u32 = 2;
 pub const STORAGE_OP_SET_BUFFER: u32 = 1;
 pub const STORAGE_OP_SET_REPLY: u32 = 2;
 pub const STORAGE_OP_READ_BLOCK: u32 = 3;
+/// Writes the sector at `w1` from the shared buffer established by
+/// `STORAGE_OP_SET_BUFFER` (Phase 7, Checkpoint P). Same reply shape as
+/// `STORAGE_OP_READ_BLOCK`: `w0` = 1 ok / 0 failed.
+pub const STORAGE_OP_WRITE_BLOCK: u32 = 4;
 pub const STORAGE_SECTOR_SIZE: usize = 512;
 
 /// Establishes a connection to the storage service: hands it the shared
@@ -83,6 +87,15 @@ pub fn storage_connect(storage_slot: u32, buf_grant_slot: u32, my_inbox_slot: u3
 #[allow(dead_code)]
 pub fn storage_read_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bool {
     send(storage_slot, STORAGE_OP_READ_BLOCK, lba, 0, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
+/// Writes sector `lba` from the shared buffer previously established by
+/// `storage_connect` (the caller fills the buffer's bytes locally first).
+/// Returns `true` on success.
+#[allow(dead_code)]
+pub fn storage_write_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> bool {
+    send(storage_slot, STORAGE_OP_WRITE_BLOCK, lba, 0, 0);
     recv(my_inbox_slot).w0 == 1
 }
 

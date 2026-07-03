@@ -70,28 +70,89 @@ pub fn spawn_from_module(index: usize, allowed_ports: &[u16]) -> Option<TaskId> 
         mb_info.as_ref().expect("loader::init not called yet").module(index)?
     };
 
+    let module_len = module.end - module.start;
+    spawn_with_code_pages(module_len, |i| module.start + i * mm::frame::FRAME_SIZE, allowed_ports)
+}
+
+/// Checkpoint M: loads and runs a program from up to 4 already-resolved
+/// `MemoryGrant` physical pages (see the `SYS_SPAWN_FROM_MEMORY` syscall,
+/// which does the capability resolution before calling this -- this
+/// function only ever sees physical addresses it's already been told are
+/// safe to read) totaling `total_len` bytes, the same way
+/// `spawn_from_module` loads a fixed multiboot module -- see
+/// `spawn_with_code_pages` for what's shared between the two. Always
+/// spawned with no port access and no capabilities beyond the universal
+/// name-service auto-grant: the same privilege ceiling `spawn_from_module`
+/// already enforces for the `create_task` syscall's untrusted callers,
+/// since there's no path here for a task to hand a spawned program more
+/// privilege than it could get through that existing syscall.
+///
+/// Returns `None` (rather than spawning anything) if `grants` is empty or
+/// `total_len` is zero or doesn't fit in the pages actually supplied --
+/// each `MemoryGrant` is capped at exactly one page (see cap.rs), so this
+/// is just `total_len <= grants.len() * FRAME_SIZE` -- or if physical
+/// memory is exhausted (see `spawn_with_code_pages`).
+///
+/// A spawned task's frames and page directory are never reclaimed on
+/// exit here, exactly like every other task today (`scheduler::
+/// exit_current` just marks it `Zombie`) -- a known, deliberate gap for
+/// this phase's "run a few small programs from a shell" scope, not
+/// something this syscall introduces on its own.
+pub fn spawn_from_memory(grants: &[usize], total_len: usize) -> Option<TaskId> {
+    if grants.is_empty() || total_len == 0 || total_len > grants.len() * mm::frame::FRAME_SIZE {
+        return None;
+    }
+    spawn_with_code_pages(total_len, |i| grants[i], &[])
+}
+
+/// Shared by `spawn_from_module` and `spawn_from_memory`: builds a fresh
+/// address space, maps `total_len` bytes of code at `USER_CODE_BASE`
+/// (page `i`'s source bytes come from `page_phys(i)`, since the two
+/// callers' sources -- a multiboot module's contiguous physical range vs.
+/// several independently allocated `MemoryGrant` pages -- aren't laid out
+/// the same way), a stack, and spawns the task, installing the
+/// auto-granted name-service capability the same way for both.
+///
+/// Returns `None` (rather than panicking) if physical memory is
+/// exhausted partway through: both `SYS_CREATE_TASK` and
+/// `SYS_SPAWN_FROM_MEMORY` are reachable by any unprivileged ring-3 task
+/// (the latter now trivially so, via the shell's `run` command), and
+/// since spawned tasks' frames are never reclaimed on exit, a task
+/// repeatedly spawning others is an easy way to exhaust memory --
+/// panicking the whole kernel over one task's resource exhaustion would
+/// mean any task can take the entire system down with it, exactly what
+/// this project's capability model otherwise refuses to allow. Frames
+/// already allocated earlier in this same call are left mapped rather
+/// than freed on this early return, the same acceptable-leak precedent
+/// as every other never-reclaimed spawn above.
+fn spawn_with_code_pages(total_len: usize, page_phys: impl Fn(usize) -> usize, allowed_ports: &[u16]) -> Option<TaskId> {
     let mut page_dir = mm::paging::PageDirectory::new();
 
-    let module_len = module.end - module.start;
-    let code_pages = module_len.div_ceil(mm::frame::FRAME_SIZE).max(1);
+    let code_pages = total_len.div_ceil(mm::frame::FRAME_SIZE).max(1);
     for i in 0..code_pages {
-        let phys = mm::frame::alloc_frame().expect("out of memory mapping user code");
+        let phys = mm::frame::alloc_frame()?;
         page_dir.map_page(USER_CODE_BASE + i * mm::frame::FRAME_SIZE, phys, true, true);
 
         let dst = mm::paging::phys_to_virt(phys) as *mut u8;
         let page_offset = i * mm::frame::FRAME_SIZE;
-        let copy_len = module_len.saturating_sub(page_offset).min(mm::frame::FRAME_SIZE);
+        let copy_len = total_len.saturating_sub(page_offset).min(mm::frame::FRAME_SIZE);
         unsafe {
-            core::ptr::write_bytes(dst, 0, mm::frame::FRAME_SIZE);
             if copy_len > 0 {
-                let src = mm::paging::phys_to_virt(module.start + page_offset) as *const u8;
+                let src = mm::paging::phys_to_virt(page_phys(i)) as *const u8;
                 core::ptr::copy_nonoverlapping(src, dst, copy_len);
+            }
+            // Only the tail past the copied bytes needs zeroing (e.g. the
+            // last, partial page) -- zeroing the whole frame first just to
+            // have copy_nonoverlapping immediately overwrite most or all
+            // of it was wasted work on every full page.
+            if copy_len < mm::frame::FRAME_SIZE {
+                core::ptr::write_bytes(dst.add(copy_len), 0, mm::frame::FRAME_SIZE - copy_len);
             }
         }
     }
 
     for i in 0..USER_STACK_PAGES {
-        let phys = mm::frame::alloc_frame().expect("out of memory mapping user stack");
+        let phys = mm::frame::alloc_frame()?;
         let vaddr = USER_STACK_TOP - (i + 1) * mm::frame::FRAME_SIZE;
         page_dir.map_page(vaddr, phys, true, true);
     }

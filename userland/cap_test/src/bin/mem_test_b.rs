@@ -9,6 +9,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use libpcern::print;
 
 /// CSlot 1 is the name service (auto-granted); this is this task's own
 /// inbox. CSlot 3 is mem_test_a, hand-wired by main.rs -- see
@@ -16,19 +17,12 @@ use core::panic::PanicInfo;
 /// name.
 const MY_INBOX: u32 = 2;
 const PEER_SLOT: u32 = 3;
-const OP_PUTCHAR: u32 = 0;
 
 const SHARED_VIRT: u32 = 0x0090_0000;
 const PATTERN: u32 = 0xCAFE_BABE;
 
 const MSG_SHARE: u32 = 1;
 const MSG_DONE: u32 = 2;
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
-    }
-}
 
 #[no_mangle]
 #[link_section = ".text.start"]

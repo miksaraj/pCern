@@ -1,0 +1,46 @@
+name: Release
+
+# Fires when a release is *published* (not on tag push) -- a tag push
+# happens before release notes are finalized, so building from a
+# half-drafted release is the wrong moment. A published release is the
+# deliberate, human-confirmed trigger for "ship this build".
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-attach-iso:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not a tag -- tags are mutable and a
+      # compromised upstream action could move one to point at malicious
+      # code without this workflow file changing at all. Corresponds to
+      # actions/checkout v4.3.1.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install nightly toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86
+
+      - name: Build production ISO
+        run: make iso
+
+      - name: Rename ISO to include the release tag
+        run: cp pcern-i386.iso "pcern-${{ github.event.release.tag_name }}-i386.iso"
+
+      - name: Attach ISO to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "pcern-${{ github.event.release.tag_name }}-i386.iso" --clobber --repo "${{ github.repository }}"

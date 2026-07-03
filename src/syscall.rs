@@ -28,6 +28,7 @@ const SYS_ENDPOINT_CREATE: u32 = 9;
 const SYS_CAP_MINT_BADGED: u32 = 10;
 const SYS_CAP_REVOKE: u32 = 11;
 const SYS_MEM_ALLOC: u32 = 12;
+const SYS_SPAWN_FROM_MEMORY: u32 = 13;
 
 /// Error sentinel returned in `eax` when a capability argument doesn't
 /// resolve to what a syscall needed, or the request is otherwise invalid.
@@ -178,7 +179,59 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             // frames today, no contiguous-multi-frame allocation exists.
             regs.eax = sys_mem_alloc(regs.ebx as usize);
         }
+        SYS_SPAWN_FROM_MEMORY => regs.eax = sys_spawn_from_memory(regs),
         _ => regs.eax = ERR,
+    }
+}
+
+/// Checkpoint M: loads and runs a program from up to 4 capability slots
+/// (`ebx`/`ecx`/`edx`/`esi`, `0` = stop) naming `MemoryGrant` pages the
+/// caller already assembled (typically via `SYS_MEM_ALLOC` + a filesystem
+/// read), totaling `edi` bytes -- the same privilege ceiling as
+/// `SYS_CREATE_TASK`'s existing module-loading path (no ports, no
+/// capabilities beyond the universal name-service auto-grant), just with
+/// the code coming from caller-supplied memory instead of a multiboot
+/// module baked into the boot image.
+///
+/// The security boundary here is holding each named capability, resolved
+/// through the same `resolve_current_cap` machinery every other syscall
+/// argument goes through -- not a virt-addr/page-table walk (nothing in
+/// this codebase does one, and "this happens to be present|user in my
+/// own page tables" would be a weaker property than "I hold a capability
+/// actually naming this page" anyway). `loader::spawn_from_memory` always
+/// copies these pages' bytes into freshly allocated frames (never maps a
+/// resolved grant's physical page directly into the new task), the same
+/// way `spawn_from_module` copies a multiboot module's bytes -- so the
+/// caller (or anyone else still holding a copy of that grant) can't keep
+/// writing to the new task's "code" after it starts running.
+///
+/// This must stay fully synchronous -- never call anything that can
+/// block (`ipc::send`/`recv`) here. `int 0x80` is a 32-bit *interrupt*
+/// gate (see idt.rs), which clears `EFLAGS.IF` on entry and is never
+/// re-set before this returns, so IRQ0 (the only thing that ever
+/// preempts on this single CPU) cannot fire during this call -- a
+/// TOCTOU-free window between resolving a grant and copying its bytes,
+/// but only as long as this invariant holds.
+fn sys_spawn_from_memory(regs: &SavedRegs) -> u32 {
+    let slots = [regs.ebx, regs.ecx, regs.edx, regs.esi];
+    let mut grants = [0usize; 4];
+    let mut n = 0;
+    for &slot in &slots {
+        if slot == 0 {
+            break;
+        }
+        match resolve_current_cap(slot) {
+            Some((CapKind::MemoryGrant { phys_base, .. }, _)) => {
+                grants[n] = phys_base;
+                n += 1;
+            }
+            _ => return 0,
+        }
+    }
+    let total_len = regs.edi as usize;
+    match loader::spawn_from_memory(&grants[..n], total_len) {
+        Some(id) => id as u32,
+        None => 0,
     }
 }
 

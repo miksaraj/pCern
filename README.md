@@ -41,12 +41,17 @@ physical memory beyond what a capability specifically grants.
 - **fs_fat32** -- a read-only FAT32 filesystem server, registered as
   `"fs"`, that reads sectors through `storage_ata` and serves files to its
   own clients.
+- **shell** -- a minimal interactive shell: reads a line via
+  `console_server`'s input protocol, then dispatches `read <file>`/
+  `run <file>` against `fs_fat32` and the `SYS_SPAWN_FROM_MEMORY` syscall
+  -- the first thing in this project you can actually type a command
+  into.
 - **libpcern** -- the shared `no_std` syscall/protocol bindings every
   program above links against.
 - **cap_test** -- regression fixtures for the capability/IPC mechanisms
   (transfer, badging, revocation, shared-memory grants) and end-to-end
-  clients that exercise the storage and filesystem protocols. Not part of
-  a normal boot; see [Testing](#testing) below.
+  clients that exercise the storage, filesystem, and console-input
+  protocols. Not part of a normal boot; see [Testing](#testing) below.
 
 Each has its own README under `userland/<name>/README.md` with the wire
 protocol and design notes specific to it.
@@ -117,18 +122,37 @@ proves.
 This is also what CI (`.github/workflows/ci.yml`) runs on every push and
 pull request against `main`.
 
+`make test` also runs `make test-keyboard`: a third kernel build
+(`--features keyboard_test`, `grub-keytest.cfg`) that boots just
+`cap_test`'s `console_input_test` fixture in its own isolated QEMU
+invocation with a monitor socket, and drives it with *real* PS/2
+keystrokes via QEMU's monitor `sendkey` command rather than a synthetic
+in-process byte -- see `run_console_input_test.sh` and
+`userland/cap_test/README.md` for how synchronization works.
+
+## Releases
+
+Publishing a GitHub release (`.github/workflows/release.yml`, triggered on
+`release: published`, not on tag push -- a tag push happens before release
+notes are finalized) builds the production ISO from the tagged commit via
+`make iso` and attaches it to the release as `pcern-<tag>-i386.iso`. This
+only applies to releases published from now on; it does not retroactively
+attach an ISO to earlier releases.
+
 ## Repository layout
 
 ```
-src/                  the kernel (ring 0)
-userland/             ring-3 services and shared bindings (see above)
-testdata/             small fixed input files for the FAT32 test image
-grub.cfg              production boot config
-grub-test.cfg         test-harness boot config (make test only)
-run_tests.sh           the test harness's pass/fail checker
-Makefile              build orchestration -- see it for every target
-CLAUDE.md              development process and design history
-CHANGELOG.md           release history (Keep a Changelog format)
+src/                        the kernel (ring 0)
+userland/                   ring-3 services and shared bindings (see above)
+testdata/                   small fixed input files for the FAT32 test image
+grub.cfg                    production boot config
+grub-test.cfg               test-harness boot config (make test only)
+grub-keytest.cfg            keyboard-input test boot config (make test-keyboard only)
+run_tests.sh                the test harness's pass/fail checker
+run_console_input_test.sh   the keyboard-input test's pass/fail checker
+Makefile                    build orchestration -- see it for every target
+CLAUDE.md                   development process and design history
+CHANGELOG.md                release history (Keep a Changelog format)
 ```
 
 ## Status

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-03
+
+### Added
+
+- `console_input_test`: exercises `console_server`'s new line-input
+  protocol against *real* PS/2 keystrokes injected via QEMU's monitor
+  `sendkey` command, synchronized on a serial readiness marker. Only
+  ever wired into the new standalone `keyboard_test` kernel build/boot
+  config (see `run_console_input_test.sh`, `make test-keyboard`) --
+  never the shared `iso-test` build every other fixture here runs under,
+  since it would simply hang that harness waiting for keystrokes that
+  never arrive.
+- `loaded_program`: the tiniest possible ring-3 program (exits with a
+  single distinctive code), dropped onto the test FAT32 image as
+  `LOADED.BIN` rather than run as a multiboot module -- `fs_client_test`
+  reads it via the real `fs_fat32` protocol and spawns it with the new
+  `SYS_SPAWN_FROM_MEMORY` syscall, confirming (via that distinctive exit
+  code) that the loaded program actually executed, not just that the
+  syscall returned a task id.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release.

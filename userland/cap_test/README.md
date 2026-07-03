@@ -47,7 +47,31 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   multi-cluster one from the generated test image (`/testdata`), and
   checksums the multi-cluster read to prove the FAT chain-walking path
   specifically (the small file fits in one cluster and never exercises
-  it).
+  it). Also loads and runs `LOADED.BIN` (see `loaded_program` below)
+  through this same connection, exercising `SYS_SPAWN_FROM_MEMORY`
+  end to end -- a *second* fixture connecting to `fs_fat32` concurrently
+  would clobber this one's, since it only supports one client at a time.
+- **`loaded_program`** -- not spawned directly; the tiniest possible
+  ring-3 program (it just calls `exit(42)`), objcopy'd and dropped onto
+  the test FAT32 image as `LOADED.BIN` by `make test-fat32-image`.
+  `fs_client_test` reads its bytes via the real filesystem protocol and
+  spawns it with `SYS_SPAWN_FROM_MEMORY`; seeing task 11 exit with code
+  `42` specifically (not the `-1` a crashing/faulted task would exit
+  with) in `run_tests.sh` is what actually proves the loaded code ran,
+  not just that the syscall returned a task id.
+- **`console_input_test`** -- exercises `console_server`'s line-input
+  protocol against *real* PS/2 keystrokes injected via QEMU's monitor
+  `sendkey` command, not a synthetic in-process byte. Runs in its own
+  standalone kernel build/boot config (`--features keyboard_test`,
+  `grub-keytest.cfg`) rather than the shared `iso-test` every fixture
+  above runs under, since it's the one fixture that blocks on real
+  external input -- folded into `iso-test`, it would just hang that
+  harness until its boot timeout. `run_console_input_test.sh` (`make
+  test-keyboard`) boots it with its own QEMU monitor socket, waits for
+  this fixture's own readiness marker on serial (a synchronization
+  *gate*, not the pass/fail signal -- that's still the exit code) before
+  calling `sendkey`, and checks the result the same way as every other
+  fixture.
 
 ## Adding a new fixture
 

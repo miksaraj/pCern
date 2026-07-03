@@ -34,6 +34,11 @@ FS_FAT32_TARGET := i686-pcern-user
 FS_FAT32_ELF := $(FS_FAT32_DIR)/target/$(FS_FAT32_TARGET)/$(PROFILE)/fs_fat32
 FS_FAT32_BIN := $(USERLAND_DIR)/fs_fat32.bin
 
+SHELL_DIR := $(USERLAND_DIR)/shell
+SHELL_TARGET := i686-pcern-user
+SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
+SHELL_BIN := $(USERLAND_DIR)/shell.bin
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -52,6 +57,17 @@ ISO_TEST_PATH := iso-test
 BOOT_TEST_PATH := $(ISO_TEST_PATH)/boot
 GRUB_TEST_PATH := $(BOOT_TEST_PATH)/grub
 ISO_TEST := pcern-test-i386.iso
+
+# Checkpoint L's keyboard-input test harness: its own standalone kernel
+# build (--features keyboard_test) + grub config + ISO, separate from
+# both the production and the shared iso-test builds above -- see
+# console_input_test.rs's doc comment for why this fixture can't share
+# either of those.
+CFG_KEYTEST := grub-keytest.cfg
+ISO_KEYTEST_PATH := iso-keytest
+BOOT_KEYTEST_PATH := $(ISO_KEYTEST_PATH)/boot
+GRUB_KEYTEST_PATH := $(BOOT_KEYTEST_PATH)/grub
+ISO_KEYTEST := pcern-keytest-i386.iso
 
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
@@ -74,7 +90,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN)
+userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
 
 $(CONSOLE_SERVER_BIN): FORCE
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)
@@ -91,6 +107,10 @@ $(STORAGE_ATA_BIN): FORCE
 $(FS_FAT32_BIN): FORCE
 	cd $(FS_FAT32_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(FS_FAT32_ELF) $(FS_FAT32_BIN)
+
+$(SHELL_BIN): FORCE
+	cd $(SHELL_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(SHELL_ELF) $(SHELL_BIN)
 
 .PHONY: FORCE
 FORCE:
@@ -110,6 +130,10 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/storage_client_test $(USERLAND_DIR)/storage_client_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/fs_client_test $(USERLAND_DIR)/fs_client_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/console_input_test $(USERLAND_DIR)/console_input_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -119,6 +143,7 @@ iso: kernel userland
 	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
 	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
 	$(CP) $(FS_FAT32_BIN) $(BOOT_PATH)/fs_fat32.bin
+	$(CP) $(SHELL_BIN) $(BOOT_PATH)/shell.bin
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -143,17 +168,40 @@ iso-test: kernel-test userland cap_test
 	$(CP) $(CFG_TEST) $(GRUB_TEST_PATH)/grub.cfg
 	grub-mkrescue -o $(ISO_TEST) $(ISO_TEST_PATH)
 
+.PHONY: kernel-keytest
+kernel-keytest:
+	$(CARGO) build --$(PROFILE) --features keyboard_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-keytest
+iso-keytest: kernel-keytest userland cap_test
+	$(MKDIR) $(GRUB_KEYTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_KEYTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_KEYTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_KEYTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_KEYTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_KEYTEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/console_input_test.bin $(BOOT_KEYTEST_PATH)/console_input_test.bin
+	$(CP) $(CFG_KEYTEST) $(GRUB_KEYTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_KEYTEST) $(ISO_KEYTEST_PATH)
+
+.PHONY: test-keyboard
+test-keyboard: iso-keytest
+	./run_console_input_test.sh $(ISO_KEYTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
+	$(MAKE) test-keyboard
 
 .PHONY: test-fat32-image
-test-fat32-image:
+test-fat32-image: cap_test
 	$(RM) $(TEST_FAT32_IMG)
 	dd if=/dev/zero of=$(TEST_FAT32_IMG) bs=1M count=64 status=none
 	$(MTOOLS_MFORMAT) -i $(TEST_FAT32_IMG) -F -v PCERNFS ::
 	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/HELLO.TXT ::HELLO.TXT
 	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(TESTDATA_DIR)/BIG.TXT ::BIG.TXT
+	$(MTOOLS_MCOPY) -i $(TEST_FAT32_IMG) $(USERLAND_DIR)/loaded_program.bin ::LOADED.BIN
 
 .PHONY: run
 run: iso
@@ -166,5 +214,6 @@ clean:
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
+	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

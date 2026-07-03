@@ -3,6 +3,14 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
+// Each spawns a different binary at multiboot module index 4
+// (test_harness_spawn expects cap_test_a, keyboard_test_spawn expects
+// console_input_test) against its own dedicated grub config -- building
+// with both would have them race for the same module slot with no
+// identity check to catch the mismatch.
+#[cfg(all(feature = "test_harness", feature = "keyboard_test"))]
+compile_error!("test_harness and keyboard_test are mutually exclusive boot configurations; build one or the other, never both");
+
 extern crate alloc;
 
 use core::arch::global_asm;
@@ -139,10 +147,6 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let irq_slot = scheduler::install_cap_for(console_id, irq_control);
     debug_assert_eq!(irq_slot, 4, "console_server's IrqControl must land at CSlot 4");
 
-    scheduler::spawn_kernel_task(task_a);
-    scheduler::spawn_kernel_task(task_b);
-    println!("[ \x1b[1;32mok\x1b[0m ] spawned 2 kernel tasks");
-
     // Checkpoint I: the ATA/IDE storage driver. Port access is still
     // hand-wired here the same way console_server's is (there's no
     // capability for I/O ports, just the pre-existing allowed_ports/TSS
@@ -164,8 +168,28 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
+    // Checkpoint N: the interactive shell -- purely an IPC client of
+    // console_server/fs_fat32/name-service, no hardware ports or
+    // capabilities of its own beyond the usual CSlot 1/2 convention.
+    // Excluded from the test_harness/keyboard_test builds: it would be
+    // one more concurrent console-input reader racing console_input_test
+    // for the "single reader at a time" role in the keyboard_test build,
+    // and would shift every fixture's task id (used throughout
+    // run_tests.sh/console_input_test's own script) in the test_harness
+    // build for no benefit, since nothing there exercises it anyway.
+    #[cfg(not(any(feature = "test_harness", feature = "keyboard_test")))]
+    {
+        let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
+        println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'shell' (id={})", shell_id);
+        let shell_endpoint = ipc::create_endpoint(shell_id);
+        grant_endpoint_cap(shell_id, shell_endpoint); // shell's CSlot 2: its own inbox
+    }
+
     #[cfg(feature = "test_harness")]
     test_harness_spawn();
+
+    #[cfg(feature = "keyboard_test")]
+    keyboard_test_spawn();
 
     // Spawned last. Never blocks or exits, so block_current()/exit_current()
     // always have at least one task to fall back to instead of panicking
@@ -191,7 +215,7 @@ fn grant_endpoint_cap(task_id: task::TaskId, endpoint: cap::EndpointId) -> cap::
 /// tasks, only present in a kernel built with `--features test_harness`
 /// (see `make test`) -- `grub-test.cfg` is the one grub config whose
 /// module list actually matches the indices below; production's
-/// `grub.cfg` only has modules 0-3. Each fixture gets the same CSlot 1 =
+/// `grub.cfg` only has modules 0-4. Each fixture gets the same CSlot 1 =
 /// name service / CSlot 2 = own inbox convention as every other task;
 /// the two paired fixtures (which need to reach a specific peer, not
 /// something discoverable by name) additionally get that peer's endpoint
@@ -230,6 +254,14 @@ fn test_harness_spawn() {
     // thoroughly at one remove; storage_client_test is still there for
     // standalone verification (temporarily wired in with fs_fat32 absent,
     // the way Checkpoint I originally used it).
+    // Checkpoint M: fs_client_test also exercises the new
+    // SYS_SPAWN_FROM_MEMORY syscall (loads and runs LOADED.BIN) after its
+    // own fs_fat32 checks, rather than a second fixture connecting to
+    // fs_fat32 concurrently -- fs_fat32 only supports one client at a
+    // time (same single-client scope as storage_ata), the same reason
+    // storage_client_test can't run alongside it either. See
+    // fs_client_test.rs and run_tests.sh's check for the exact task id
+    // this produces.
     let fs_client_test_id =
         loader::spawn_from_module(8, &[]).expect("no multiboot module 8 found for 'fs_client_test'");
     let fs_client_test_endpoint = ipc::create_endpoint(fs_client_test_id);
@@ -241,27 +273,36 @@ fn test_harness_spawn() {
     );
 }
 
+/// Spawns `console_input_test` (see `userland/cap_test`) as a ring-3
+/// task, only present in a kernel built with `--features keyboard_test`
+/// (see `make iso-keytest`) -- `grub-keytest.cfg` is the one grub config
+/// whose module list matches the index below; this is deliberately its
+/// own standalone build/boot rather than one more fixture folded into
+/// `test_harness_spawn`, since this is the one fixture that blocks on
+/// real external keystrokes (see run_console_input_test.sh) rather than
+/// completing on its own -- folded into the shared `iso-test` boot, it
+/// would simply hang every `make test` run until that harness's own
+/// timeout. Granted direct COM1 port access (0x3F8 data, 0x3FD line
+/// status), the same allowed_ports mechanism storage_ata's ATA ports use,
+/// so it can print its own readiness marker straight to serial -- see its
+/// own doc comment for why.
+#[cfg(feature = "keyboard_test")]
+fn keyboard_test_spawn() {
+    const COM1_PORTS: [u16; 2] = [0x3F8, 0x3FD];
+    let console_input_test_id =
+        loader::spawn_from_module(4, &COM1_PORTS).expect("no multiboot module 4 found for 'console_input_test'");
+    let console_input_test_endpoint = ipc::create_endpoint(console_input_test_id);
+    grant_endpoint_cap(console_input_test_id, console_input_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] keyboard_test: spawned console_input_test (id={})",
+        console_input_test_id
+    );
+}
+
 extern "C" fn idle_task() -> ! {
     loop {
         unsafe { core::arch::asm!("hlt") };
-    }
-}
-
-extern "C" fn task_a() -> ! {
-    let mut i: u32 = 0;
-    loop {
-        println!("\x1b[1;32m[task A]\x1b[0m iteration {}", i);
-        i += 1;
-        scheduler::yield_now();
-    }
-}
-
-extern "C" fn task_b() -> ! {
-    let mut i: u32 = 0;
-    loop {
-        println!("\x1b[1;35m[task B]\x1b[0m iteration {}", i);
-        i += 1;
-        scheduler::yield_now();
     }
 }
 

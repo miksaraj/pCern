@@ -4,6 +4,7 @@
 # Make results
 iso
 iso-test
+iso-keytest
 *.iso
 *.o
 *.elf
@@ -18,6 +19,8 @@ userland/cap_test/target
 userland/nameservice/target
 userland/storage_ata/target
 userland/fs_fat32/target
+userland/libpcern/target
+userland/shell/target
 
 # Assembled userland test binaries
 userland/*.bin

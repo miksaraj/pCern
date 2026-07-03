@@ -48,6 +48,11 @@ pub extern "x86-interrupt" fn general_protection_fault(frame: InterruptStackFram
 }
 
 pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code: u32) {
-    println!("\x1b[1;31mEXCEPTION: page fault (error={:#x})\x1b[0m", error_code);
+    let cr2: u32;
+    unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2) };
+    println!(
+        "\x1b[1;31mEXCEPTION: page fault (error={:#x}, cr2={:#x}, eip={:#x}, cs={:#x})\x1b[0m",
+        error_code, cr2, frame.eip, frame.cs
+    );
     recover_or_halt(&frame);
 }

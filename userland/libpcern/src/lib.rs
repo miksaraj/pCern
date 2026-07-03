@@ -34,6 +34,7 @@ pub const SYS_ENDPOINT_CREATE: u32 = 9;
 pub const SYS_CAP_MINT_BADGED: u32 = 10;
 pub const SYS_CAP_REVOKE: u32 = 11;
 pub const SYS_MEM_ALLOC: u32 = 12;
+pub const SYS_SPAWN_FROM_MEMORY: u32 = 13;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -157,6 +158,101 @@ pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
 pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
     send(fs_slot, FS_OP_READ, offset, len, 0);
     recv(my_inbox_slot).w0
+}
+
+/// Console *input* wire protocol (see userland/console_server). A reader
+/// connects once (`console_connect`) -- handing over a shared page via
+/// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
+/// line's bytes into, and its own dedicated line-ready endpoint (never
+/// shared with any other role -- see CLAUDE.md's "one inbox is not
+/// automatically safe for two roles") as the reply-to address -- then
+/// issues one `CONSOLE_OP_READ_LINE` request per line it wants to read.
+/// Only one reader is supported at a time, the same scope-narrowing
+/// precedent as storage_ata's single client -- but worth calling out
+/// specifically here: unlike storage_ata's client (fs_fat32, always
+/// already blocked in its own `recv` by the time a reply is due),
+/// console_server is a system-wide, always-running service. `send`
+/// blocks the *sender* until a matching `recv` arrives (see ipc.rs's
+/// rendezvous design), so a reader that requests a line and then never
+/// calls `recv` would block console_server's entire main loop --
+/// starving every other task's `OP_PUTCHAR` and all further keystroke
+/// echo, too -- until it does. Acceptable for this phase's single
+/// trusted shell client; would need revisiting (e.g. a bounded queue or
+/// timeout) if an untrusted reader is ever introduced.
+///
+/// The first sender to successfully complete `CONSOLE_OP_SET_BUFFER`
+/// becomes console_server's one reader for the rest of this boot --
+/// every later `CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE` from any
+/// *other* sender is silently ignored (checked against the
+/// kernel-attested sender id, not anything the caller provides). Without
+/// this, any task -- including one with no privilege beyond the
+/// universal name-service auto-grant, since `console` lookups are open
+/// to any caller -- could re-point the connection at itself and receive
+/// every keystroke typed afterward instead of the legitimate reader.
+pub const CONSOLE_OP_SET_BUFFER: u32 = 1;
+pub const CONSOLE_OP_SET_READER: u32 = 2;
+pub const CONSOLE_OP_READ_LINE: u32 = 3;
+
+/// Bytes typed before Enter beyond this are dropped (not buffered, and
+/// not an error) -- bounded well under the shared page's 4096-byte
+/// capacity for headroom; see console_server's own accumulator.
+pub const CONSOLE_LINE_MAX: usize = 256;
+
+/// Establishes a connection to console_server's line-input protocol, same
+/// shape as `storage_connect`/`fs_connect`.
+#[allow(dead_code)]
+pub fn console_connect(console_slot: u32, buf_grant_slot: u32, reader_slot: u32) {
+    send(console_slot, CONSOLE_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(console_slot, CONSOLE_OP_SET_READER, 0, 0, reader_slot);
+}
+
+/// Requests the next typed line and blocks until Enter is pressed.
+/// Returns the number of bytes placed in the shared buffer established by
+/// `console_connect` (not including the trailing newline) -- may be `0`
+/// for an empty line.
+#[allow(dead_code)]
+pub fn console_read_line(console_slot: u32, reader_slot: u32) -> u32 {
+    send(console_slot, CONSOLE_OP_READ_LINE, 0, 0, 0);
+    recv(reader_slot).w0
+}
+
+/// Wire protocol other tasks use to reach the screen: `send(console_slot,
+/// OP_PUTCHAR, byte, 0, 0)`, one call per character -- see
+/// userland/console_server's own README for the full protocol.
+pub const OP_PUTCHAR: u32 = 0;
+
+/// Sends `s` to `console_slot` one byte at a time via `OP_PUTCHAR`. Used
+/// by every userland program that prints diagnostics directly (rather
+/// than through a higher-level protocol), so this one copy is shared
+/// instead of being hand-duplicated per crate.
+#[allow(dead_code)]
+pub fn print(console_slot: u32, s: &[u8]) {
+    for &b in s {
+        send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
+    }
+}
+
+/// Prints `n` in decimal via `print`. No sign, no padding -- just enough
+/// for the small diagnostic counters/sizes this project's fixtures and
+/// shell print (task ids, file sizes, checksums).
+#[allow(dead_code)]
+pub fn print_u32(console_slot: u32, mut n: u32) {
+    if n == 0 {
+        print(console_slot, b"0");
+        return;
+    }
+    let mut digits = [0u8; 10];
+    let mut i = 0;
+    while n > 0 {
+        digits[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    let mut buf = [0u8; 10];
+    for j in 0..i {
+        buf[j] = digits[i - 1 - j];
+    }
+    print(console_slot, &buf[..i]);
 }
 
 /// Packs up to 8 bytes of `name` into two little-endian u32 words,
@@ -321,6 +417,24 @@ pub fn mem_alloc(virt_addr: u32) -> u32 {
 #[allow(dead_code)]
 pub fn create_task(module_index: u32) -> u32 {
     unsafe { syscall_raw(SYS_CREATE_TASK, module_index, 0, 0, 0, 0) }.eax
+}
+
+/// Checkpoint M: loads and runs a program from up to 4 `MemoryGrant`
+/// capability slots (see `SYS_MEM_ALLOC`) the caller has already filled
+/// with code bytes (typically read from a file via `fs_read`), totaling
+/// `total_len` bytes -- the load-from-memory counterpart to
+/// `create_task`'s load-from-module-index. `grant_slots` must have
+/// between 1 and 4 entries; the new task gets no privilege beyond the
+/// universal name-service auto-grant, the same ceiling `create_task`
+/// already enforces. Returns the new task's id, or `0` on failure (an
+/// invalid grant slot, or `total_len` not fitting in the pages supplied --
+/// each `MemoryGrant` is capped at one page, see cap.rs in the kernel).
+#[allow(dead_code)]
+pub fn spawn_from_memory(grant_slots: &[u32], total_len: u32) -> u32 {
+    let mut slots = [0u32; 4];
+    let n = grant_slots.len().min(4);
+    slots[..n].copy_from_slice(&grant_slots[..n]);
+    unsafe { syscall_raw(SYS_SPAWN_FROM_MEMORY, slots[0], slots[1], slots[2], slots[3], total_len) }.eax
 }
 
 /// Mints a new endpoint owned by the caller and installs a capability to

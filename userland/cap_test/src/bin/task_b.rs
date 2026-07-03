@@ -7,23 +7,17 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use libpcern::print;
 
 /// CSlot 1 is the name service (auto-granted); this is this task's own
 /// inbox. CSlot 3 is task_a, hand-wired by main.rs -- see task_a.rs's
 /// doc comment on its own MY_INBOX/PEER_SLOT constants.
 const MY_INBOX: u32 = 2;
 const PEER_SLOT: u32 = 3;
-const OP_PUTCHAR: u32 = 0;
 
 const MSG_GIFT: u32 = 1;
 const MSG_ACK: u32 = 2;
 const MSG_GO: u32 = 3;
-
-fn print(console_slot: u32, s: &[u8]) {
-    for &b in s {
-        libpcern::send(console_slot, OP_PUTCHAR, b as u32, 0, 0);
-    }
-}
 
 #[no_mangle]
 #[link_section = ".text.start"]

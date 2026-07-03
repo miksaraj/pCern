@@ -11,6 +11,73 @@ as a whole.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+The first interactive OS experience: type a command, something happens.
+
+### Added
+
+- A shared-memory buffered line-input protocol in `console_server`
+  (`CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE`), mirroring
+  `storage_ata`'s connect shape -- a client hands over a page and its own
+  reader endpoint, then requests one typed line at a time. Verified
+  against real PS/2 keystrokes injected through QEMU's monitor `sendkey`
+  command (not a synthetic in-process byte), via a new standalone
+  `keyboard_test` kernel feature/boot config and permanent fixture
+  (`console_input_test`) synchronized on a serial readiness marker rather
+  than a fixed sleep.
+- A new syscall, `SYS_SPAWN_FROM_MEMORY` (13): loads and runs a program
+  from up to 4 capability slots naming `MemoryGrant` pages the caller
+  already filled with code (e.g. read from a file), the load-from-memory
+  counterpart to the existing load-from-multiboot-module path
+  (`SYS_CREATE_TASK`). Resolves capabilities the same way every other
+  syscall argument does and always copies the bytes into freshly
+  allocated frames, never mapping a resolved grant's physical pages
+  directly into the new task. The new task gets no privilege beyond the
+  universal name-service auto-grant.
+- `userland/shell`: a minimal interactive shell reading lines from
+  `console_server`'s new input protocol and dispatching `read <file>`/
+  `run <file>` against `fs_fat32` and the new syscall -- the first thing
+  in this project you can actually type a command into and watch happen.
+- A `release.yml` GitHub Actions workflow: on publishing a GitHub release,
+  builds the production ISO from the tagged commit (`make iso`) and
+  attaches it as `pcern-<tag>-i386.iso`.
+
+### Fixed
+
+- `PageDirectory::new()` read its higher-half template page-directory
+  entries by indexing the `boot_page_directory` static directly, which
+  only works while that static's own low physical address happens to
+  still be identity-mapped under the currently active page directory --
+  true throughout every earlier caller (all of which ran during boot
+  under `boot_page_directory` itself), but not once a page directory is
+  built from inside a syscall running under some other task's own page
+  directory, which `SYS_SPAWN_FROM_MEMORY` is the first thing to actually
+  do. Fixed to read through the physical-memory map instead, which is
+  present in every address space regardless of which one is active.
+
+### Security
+
+- `console_server`'s new line-input protocol had no check that a
+  `CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE` message came from the
+  task that owned the current reader connection -- any task, including
+  one spawned with no privilege beyond the universal name-service
+  auto-grant (e.g. via the new shell's `run` command), could re-point
+  the connection at itself and receive every keystroke typed afterward
+  instead of the legitimate reader. Fixed by latching the first
+  successful `SET_BUFFER`'s kernel-attested sender id as the
+  connection's owner and ignoring these ops from any other sender.
+
+### Removed
+
+- The two endless-print kernel smoke-test tasks (`task_a`/`task_b`,
+  present since the earliest checkpoints) from every boot configuration,
+  including production -- their unthrottled console/serial spam has no
+  place in a build meant to actually be typed into. Removing them also
+  simplified every task-id-dependent build (`nameservice`'s registration
+  allowlist, `run_tests.sh`) down to one consistent numbering instead of
+  the production/test_harness builds needing +2 for their presence.
+
 ## [0.2.0] - 2026-07-02
 
 Full rewrite of the original C stub into a Rust nanokernel with real

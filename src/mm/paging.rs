@@ -81,14 +81,32 @@ impl PageDirectory {
     /// Allocates a fresh page directory that already contains the kernel's
     /// higher-half mapping (shared identically across every address space,
     /// so syscalls/interrupts work no matter which task's CR3 is loaded).
+    ///
+    /// Reads the template PDEs through `phys_to_virt(boot_page_directory_phys())`
+    /// rather than indexing the `boot_page_directory` static directly: that
+    /// static's *linked* address equals its own low physical address (LMA
+    /// == VMA for the `.boot` section -- see linker.ld), which is only
+    /// identity-mapped under the boot bootstrap page directory itself, not
+    /// under any per-task page directory this same function has already
+    /// built (those only copy the higher half, see the loop below -- low
+    /// memory is deliberately not part of it). Calling this while some
+    /// other task's own page directory is the active CR3 -- which never
+    /// happened before `SYS_SPAWN_FROM_MEMORY`'s `loader::spawn_from_memory`
+    /// started calling it from inside a syscall, since every earlier
+    /// caller ran during boot under `boot_page_directory` itself -- would
+    /// otherwise fault reading a "low identity mapping" that isn't there.
+    /// The physmap window, unlike that identity mapping, is present in
+    /// every page directory regardless of which one is active, which is
+    /// exactly the property this needs.
     pub fn new() -> Self {
         let phys_frame = frame::alloc_frame().expect("out of physical memory");
         zero_frame(phys_frame);
 
         let table = phys_to_virt(phys_frame) as *mut u32;
+        let boot_table = phys_to_virt(boot_page_directory_phys()) as *const u32;
         unsafe {
             for i in KERNEL_VMA_PDE_INDEX..1024 {
-                *table.add(i) = boot_page_directory[i];
+                *table.add(i) = *boot_table.add(i);
             }
         }
 

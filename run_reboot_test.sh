@@ -5,13 +5,20 @@
 # Checkpoint V's `reboot_test` fixture (userland/cap_test/src/bin/
 # reboot_test.rs) prints a marker to serial, then immediately calls the new
 # SYS_REBOOT syscall -- pulsing the 8042 keyboard controller's CPU-reset
-# line. There's no exit code to check (the machine resets before the
-# fixture could ever call `exit`), so this script's pass signal works the
-# other way around: `-no-reboot` makes QEMU quit, rather than actually
-# restart, the instant a real reset happens, so a *prompt, unforced* QEMU
-# exit is itself the proof the pulse reached real (emulated) hardware --
-# distinguished from a hang (this script's own `timeout` killing QEMU,
-# exit code 124) by checking QEMU's own exit status.
+# line. On the success path there's no exit code to check (the machine
+# resets before the fixture could ever call `exit`), so this script's main
+# pass signal works the other way around: `-no-reboot` makes QEMU quit,
+# rather than actually restart, the instant a real reset happens, so a
+# *prompt, unforced* QEMU exit is itself the proof the pulse reached real
+# (emulated) hardware -- distinguished from a hang (this script's own
+# `timeout` killing QEMU, exit code 124) by checking QEMU's own exit
+# status. The one path that *does* reach `exit()` -- the reboot syscall
+# being rejected -- is still checked via the kernel-attested "task N
+# exited with code" line (task id 5: nameservice=1, console_server=2,
+# storage_ata=3, fs_fat32=4, reboot_test=5), the same convention
+# run_tests.sh's check_exit() uses, not the fixture's own printed string --
+# see CLAUDE.md's testing section for why console text alone isn't the
+# pass/fail signal.
 
 set -uo pipefail
 
@@ -46,8 +53,8 @@ else
     FAILED=1
 fi
 
-if grep -q "reboot_test: FAIL" "$SERIAL_LOG"; then
-    echo "FAIL: reboot_test reported the reboot syscall was rejected"
+if grep -q "task 5 exited with code" "$SERIAL_LOG"; then
+    echo "FAIL: reboot_test exited instead of resetting the machine -- SYS_REBOOT was rejected"
     FAILED=1
 fi
 

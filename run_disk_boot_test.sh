@@ -32,6 +32,23 @@ timeout "$BOOT_TIMEOUT" qemu-system-i386 \
     -display none \
     -d int -D "$INT_LOG" \
     -no-reboot -monitor none
+QEMU_EXIT=$?
+
+# Unlike run_reboot_test.sh, a normal production boot never exits on its
+# own -- shell blocks forever on console input -- so `timeout` killing
+# QEMU (exit 124) is the *expected* outcome here, not a failure. What
+# would actually indicate a problem before any of the checks below even
+# get a chance to run is QEMU exiting some other way (e.g. a corrupt
+# disk image or bad invocation causing it to fail immediately) --
+# reported distinctly so it doesn't masquerade as a wall of generic
+# marker-missing FAILs pointing at a nonexistent kernel/boot regression.
+if [ "$QEMU_EXIT" -ne 0 ] && [ "$QEMU_EXIT" -ne 124 ]; then
+    echo "FAIL: QEMU exited unexpectedly (code $QEMU_EXIT) before boot could be checked -- likely a bad disk image or QEMU invocation, not a kernel/boot regression"
+    echo
+    echo "=== serial log ==="
+    cat "$SERIAL_LOG"
+    exit 1
+fi
 
 FAILED=0
 

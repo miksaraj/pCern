@@ -40,6 +40,22 @@ SHELL_TARGET := i686-pcern-user
 SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
 SHELL_BIN := $(USERLAND_DIR)/shell.bin
 
+# Every default userland service, in main.rs's fixed spawn order. `iso`
+# iterates this list (instead of hand-listing every binary separately) so
+# a future service only needs adding here once, not as two separately
+# hand-kept copies (this list, and `disk`'s below) that could silently
+# drift apart.
+PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
+# `disk`'s own copy of the same list, paired (`path:8.3-name`) with the
+# uppercase short name each binary lands under on the FAT32 boot disk --
+# unlike `iso`'s ISO9660+Rock Ridge (which tolerates the binaries'
+# ordinary lowercase basenames above), the FAT32 partition GRUB's `fat`
+# module and this project's own `fs_fat32` both read only supports
+# classic 8.3 short names. Kept as one paired list, not two separate
+# parallel ones, so there's no way for the two to fall out of sync with
+# each other by reordering.
+PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(SHELL_BIN):SHELL.BIN
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -197,11 +213,7 @@ cap_test:
 iso: kernel userland
 	$(MKDIR) $(GRUB_PATH)
 	$(CP) $(KERNEL_BIN) $(BOOT_PATH)/pcern.elf
-	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
-	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
-	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
-	$(CP) $(FS_FAT32_BIN) $(BOOT_PATH)/fs_fat32.bin
-	$(CP) $(SHELL_BIN) $(BOOT_PATH)/shell.bin
+	$(foreach bin,$(PROD_USERLAND_BINS),$(CP) $(bin) $(BOOT_PATH)/$(notdir $(bin));)
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -364,21 +376,19 @@ disk: kernel userland
 		--fonts="" --locales="" --themes="" \
 		"boot/grub/grub.cfg=$(CFG_DISK)"
 	$(CP) /usr/lib/grub/i386-pc/boot.img $(DISK_BUILD_DIR)/boot.img
-	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB) status=none
+	truncate -s $(DISK_SIZE_MB)M $(DISK_IMG)
 	printf 'label: dos\nunit: sectors\nstart=%s, type=c\n' $(DISK_PART_START_SECTOR) | sfdisk $(DISK_IMG)
-	dd if=/dev/zero of=$(DISK_FAT_IMG) bs=512 \
-		count=$$(( $(DISK_SIZE_MB) * 2048 - $(DISK_PART_START_SECTOR) )) status=none
-	mkfs.vfat -F 32 -n ZLBOOT $(DISK_FAT_IMG)
+	mkfs.vfat -F 32 -n ZLBOOT -C $(DISK_FAT_IMG) \
+		$$(( ($(DISK_SIZE_MB) * 2048 - $(DISK_PART_START_SECTOR)) / 2 ))
+	for pair in $(PROD_USERLAND_DISK_FILES); do \
+		src="$${pair%%:*}"; dst="$${pair#*:}"; \
+		$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) "$$src" "::$$dst"; \
+	done
 	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(KERNEL_BIN) ::PCERN.ELF
-	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(NAMESERVICE_BIN) ::NAMESERV.BIN
-	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(CONSOLE_SERVER_BIN) ::CONSOLE.BIN
-	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(STORAGE_ATA_BIN) ::STORAGE.BIN
-	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(FS_FAT32_BIN) ::FS_FAT32.BIN
-	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(SHELL_BIN) ::SHELL.BIN
-	dd if=$(DISK_FAT_IMG) of=$(DISK_IMG) bs=512 seek=$(DISK_PART_START_SECTOR) conv=notrunc status=none
+	dd if=$(DISK_FAT_IMG) of=$(DISK_IMG) bs=512 seek=$(DISK_PART_START_SECTOR) conv=notrunc,sparse status=none
 	printf '(hd0)\t%s\n' $(DISK_IMG) > $(DISK_BUILD_DIR)/device.map
 	sudo $(GRUB_BIOS_SETUP) -d $(DISK_BUILD_DIR) -b boot.img -c core.img \
-		-m $(DISK_BUILD_DIR)/device.map -f $(DISK_IMG)
+		-m $(DISK_BUILD_DIR)/device.map $(DISK_IMG)
 
 .PHONY: run-disk
 run-disk: disk

@@ -11,6 +11,16 @@
 //! from here (load and run LOADED.BIN, see loaded_program.rs) rather than
 //! from a separate fixture -- fs_fat32 only supports one client at a
 //! time, so a second concurrent connection would clobber this one's.
+//!
+//! Phase 7, Checkpoint Q: for the same single-client reason, the new
+//! write-support exercise (create a file, write enough to force a FAT
+//! chain-extension, overwrite a middle range, reopen, read back
+//! byte-for-byte) also runs here rather than as a separate fixture. Its
+//! in-VM exit code is only half of what's actually checked -- see
+//! `run_tests.sh`'s host-side `mtools` inspection of `test_fat32.img`
+//! after QEMU exits, which independently confirms the written bytes
+//! actually reached the disk image rather than this fixture's read-back
+//! being satisfied by something fs_fat32 already held in memory.
 
 #![no_std]
 #![no_main]
@@ -154,6 +164,102 @@ pub extern "C" fn _start() -> ! {
     print(console_slot, b"fs_client_test: spawn_from_memory spawned task ");
     print_u32(console_slot, loaded_task_id);
     print(console_slot, b"\n");
+
+    // Checkpoint Q: write support. Same connection as everything above
+    // (grant_slot/BUF_VIRT) -- fs_fat32 still only supports one client
+    // connection at a time, so a second fixture opening its own would
+    // clobber this one's, exactly the same reason the spawn_from_memory
+    // exercise above reuses this connection instead of adding one.
+    const WRITE_LEN: u32 = 1500; // 3 clusters on this image (512 B/cluster)
+    const OVERWRITE_OFFSET: u32 = 700;
+    const OVERWRITE_LEN: u32 = 50;
+    fn pattern_byte(i: u32) -> u8 {
+        (i.wrapping_mul(17).wrapping_add(5) & 0xFF) as u8
+    }
+    fn overwrite_byte(i: u32) -> u8 {
+        (i.wrapping_mul(53).wrapping_add(11) & 0xFF) as u8
+    }
+    fn expected_byte(i: u32) -> u8 {
+        if i >= OVERWRITE_OFFSET && i < OVERWRITE_OFFSET + OVERWRITE_LEN {
+            overwrite_byte(i - OVERWRITE_OFFSET)
+        } else {
+            pattern_byte(i)
+        }
+    }
+
+    let initial_size = match libpcern::fs_open_for_write(fs_slot, MY_INBOX, b"WRTEST.TXT") {
+        Some(s) => s,
+        None => {
+            print(console_slot, b"fs_client_test: FAIL (create WRTEST.TXT)\n");
+            libpcern::exit(1);
+        }
+    };
+    if initial_size != 0 {
+        print(console_slot, b"fs_client_test: FAIL (new file not zero-length)\n");
+        libpcern::exit(1);
+    }
+
+    let mut offset: u32 = 0;
+    while offset < WRITE_LEN {
+        let want = (WRITE_LEN - offset).min(512);
+        let buf = unsafe { core::slice::from_raw_parts_mut(BUF_VIRT as *mut u8, want as usize) };
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = pattern_byte(offset + i as u32);
+        }
+        let n = libpcern::fs_write(fs_slot, MY_INBOX, offset, want);
+        if n == 0 {
+            print(console_slot, b"fs_client_test: FAIL (write stalled)\n");
+            libpcern::exit(1);
+        }
+        offset += n;
+    }
+
+    {
+        let buf = unsafe { core::slice::from_raw_parts_mut(BUF_VIRT as *mut u8, OVERWRITE_LEN as usize) };
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = overwrite_byte(i as u32);
+        }
+        let n = libpcern::fs_write(fs_slot, MY_INBOX, OVERWRITE_OFFSET, OVERWRITE_LEN);
+        if n != OVERWRITE_LEN {
+            print(console_slot, b"fs_client_test: FAIL (overwrite short)\n");
+            libpcern::exit(1);
+        }
+    }
+
+    let final_size = match libpcern::fs_open(fs_slot, MY_INBOX, b"WRTEST.TXT") {
+        Some(s) => s,
+        None => {
+            print(console_slot, b"fs_client_test: FAIL (reopen WRTEST.TXT)\n");
+            libpcern::exit(1);
+        }
+    };
+    if final_size != WRITE_LEN {
+        print(console_slot, b"fs_client_test: FAIL (WRTEST.TXT size mismatch)\n");
+        libpcern::exit(1);
+    }
+
+    let mut read_offset: u32 = 0;
+    let mut mismatch = false;
+    loop {
+        let n = libpcern::fs_read(fs_slot, MY_INBOX, read_offset, 512);
+        if n == 0 {
+            break;
+        }
+        let data = unsafe { core::slice::from_raw_parts(BUF_VIRT as *const u8, n as usize) };
+        for (i, &b) in data.iter().enumerate() {
+            if b != expected_byte(read_offset + i as u32) {
+                mismatch = true;
+            }
+        }
+        read_offset += n;
+    }
+
+    if mismatch || read_offset != WRITE_LEN {
+        print(console_slot, b"fs_client_test: FAIL (WRTEST.TXT readback mismatch)\n");
+        libpcern::exit(1);
+    }
+
+    print(console_slot, b"fs_client_test: WRTEST.TXT write/overwrite/readback OK\n");
 
     print(console_slot, b"fs_client_test: PASS\n");
     libpcern::exit(0);

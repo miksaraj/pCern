@@ -20,6 +20,13 @@
 # happens before the scheduler ever runs anything, that dynamically
 # spawned program deterministically lands at task id 11 (one past
 # idle_task's 10).
+#
+# fs_client_test also exercises fs_fat32's write support (Phase 7,
+# Checkpoint Q) on the same connection, creating WRTEST.TXT. Its own exit
+# code only proves the bytes round-tripped through *this boot's* fs_fat32
+# -- after QEMU exits, this script additionally reads WRTEST.TXT back out
+# of the disk image directly via mtools (independent of anything fs_fat32
+# itself believes) to confirm the write actually persisted to "disk".
 
 set -uo pipefail
 
@@ -62,6 +69,36 @@ if grep -q "task 11 exited with code 42" "$SERIAL_LOG"; then
     echo "PASS: LOADED.BIN -- dynamically spawned program actually executed (task 11 exited 42)"
 else
     echo "FAIL: LOADED.BIN -- dynamically spawned program did not exit with its distinctive code"
+    FAILED=1
+fi
+
+# Host-side check of fs_client_test's WRTEST.TXT (Checkpoint Q): reads the
+# file back directly out of the disk image via mtools, independent of
+# anything fs_fat32 itself believes, to catch the class of bug where an
+# in-VM round-trip looks correct but the bytes never actually reached the
+# disk image.
+WRTEST_EXPECTED=$(mktemp)
+WRTEST_ACTUAL=$(mktemp)
+trap 'rm -f "$SERIAL_LOG" "$INT_LOG" "$WRTEST_EXPECTED" "$WRTEST_ACTUAL"' EXIT
+
+python3 -c '
+write_len = 1500
+overwrite_offset = 700
+overwrite_len = 50
+out = bytearray(write_len)
+for i in range(write_len):
+    if overwrite_offset <= i < overwrite_offset + overwrite_len:
+        out[i] = (( i - overwrite_offset) * 53 + 11) & 0xFF
+    else:
+        out[i] = (i * 17 + 5) & 0xFF
+import sys
+sys.stdout.buffer.write(bytes(out))
+' > "$WRTEST_EXPECTED"
+
+if mtype -i "$DISK" ::WRTEST.TXT > "$WRTEST_ACTUAL" 2>/dev/null && cmp -s "$WRTEST_EXPECTED" "$WRTEST_ACTUAL"; then
+    echo "PASS: WRTEST.TXT -- write/overwrite persisted correctly on disk (host-side mtools check)"
+else
+    echo "FAIL: WRTEST.TXT -- host-side disk content mismatch or file missing"
     FAILED=1
 fi
 

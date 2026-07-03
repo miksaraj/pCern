@@ -111,8 +111,19 @@ pub fn storage_write_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> b
 pub const FS_OP_SET_BUFFER: u32 = 1;
 pub const FS_OP_SET_REPLY: u32 = 2;
 pub const FS_OP_OPEN_NAME1: u32 = 3;
+/// `w2` (Phase 7, Checkpoint Q) is a "create if missing" flag: 0 = open
+/// existing only (the original, unchanged behavior -- every existing
+/// caller passes 0 via `fs_open`), 1 = open existing or create a fresh
+/// zero-length file. Reply is unchanged: `w0`=opened flag, `w1`=size (0
+/// for a brand-new file).
 pub const FS_OP_OPEN_NAME2: u32 = 4;
 pub const FS_OP_READ: u32 = 5;
+/// Writes `w2` bytes at offset `w1` from the shared buffer into the
+/// currently open file (Phase 7, Checkpoint Q) -- same partial-transfer
+/// contract as `FS_OP_READ` (never crosses a sector boundary, caller
+/// loops). Reply `w0` = bytes actually written (0 = no file open, buffer
+/// not mapped, or the disk is out of free clusters).
+pub const FS_OP_WRITE: u32 = 6;
 
 /// Packs `name` (e.g. `b"HELLO.TXT"`) into FAT's fixed 11-byte 8.3 form:
 /// up to 8 bytes before the `.` uppercased and space-padded, then up to 3
@@ -144,22 +155,34 @@ pub fn fs_connect(fs_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
     send(fs_slot, FS_OP_SET_REPLY, 0, 0, my_inbox_slot);
 }
 
-/// Opens `name` (e.g. `b"HELLO.TXT"`) as the filesystem service's one
-/// current file. Returns the file's size in bytes if found.
-#[allow(dead_code)]
-pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+fn fs_open_impl(fs_slot: u32, my_inbox_slot: u32, name: &[u8], create: bool) -> Option<u32> {
     let packed = fat_pack_name(name);
     let w1 = u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]);
     let w2 = u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]);
     send(fs_slot, FS_OP_OPEN_NAME1, w1, w2, 0);
     let w1b = u32::from_le_bytes([packed[8], packed[9], packed[10], 0]);
-    send(fs_slot, FS_OP_OPEN_NAME2, w1b, 0, 0);
+    send(fs_slot, FS_OP_OPEN_NAME2, w1b, if create { 1 } else { 0 }, 0);
     let r = recv(my_inbox_slot);
     if r.w0 == 1 {
         Some(r.w1)
     } else {
         None
     }
+}
+
+/// Opens `name` (e.g. `b"HELLO.TXT"`) as the filesystem service's one
+/// current file. Returns the file's size in bytes if found.
+#[allow(dead_code)]
+pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+    fs_open_impl(fs_slot, my_inbox_slot, name, false)
+}
+
+/// Opens `name` for writing: same as `fs_open`, but creates a fresh
+/// zero-length file if it doesn't already exist (Phase 7, Checkpoint Q).
+/// Returns the file's current size (0 for a brand-new file).
+#[allow(dead_code)]
+pub fn fs_open_for_write(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
+    fs_open_impl(fs_slot, my_inbox_slot, name, true)
 }
 
 /// Reads up to `len` bytes at `offset` from the currently open file into
@@ -170,6 +193,17 @@ pub fn fs_open(fs_slot: u32, my_inbox_slot: u32, name: &[u8]) -> Option<u32> {
 #[allow(dead_code)]
 pub fn fs_read(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
     send(fs_slot, FS_OP_READ, offset, len, 0);
+    recv(my_inbox_slot).w0
+}
+
+/// Writes `len` bytes at `offset` from the shared buffer (the caller
+/// fills it locally first) into the currently open file, growing it if
+/// `offset + len` exceeds its current size. Returns the number of bytes
+/// actually written (0 = no file open, buffer not mapped, or the disk is
+/// out of free clusters) -- same partial-transfer contract as `fs_read`.
+#[allow(dead_code)]
+pub fn fs_write(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 {
+    send(fs_slot, FS_OP_WRITE, offset, len, 0);
     recv(my_inbox_slot).w0
 }
 

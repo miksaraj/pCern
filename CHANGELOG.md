@@ -11,13 +11,7 @@ as a whole.
 
 ## [Unreleased]
 
-### Added
-
-- A `release.yml` GitHub Actions workflow: on publishing a GitHub release,
-  builds the production ISO from the tagged commit (`make iso`) and
-  attaches it as `pcern-<tag>-i386.iso`.
-
-## [0.3.0] - 2026-07-02
+## [0.3.0] - 2026-07-03
 
 The first interactive OS experience: type a command, something happens.
 
@@ -45,6 +39,9 @@ The first interactive OS experience: type a command, something happens.
   `console_server`'s new input protocol and dispatching `read <file>`/
   `run <file>` against `fs_fat32` and the new syscall -- the first thing
   in this project you can actually type a command into and watch happen.
+- A `release.yml` GitHub Actions workflow: on publishing a GitHub release,
+  builds the production ISO from the tagged commit (`make iso`) and
+  attaches it as `pcern-<tag>-i386.iso`.
 
 ### Fixed
 

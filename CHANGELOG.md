@@ -1,210 +1,78 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to **ZephyrLite** -- the OS as a whole, not any single
+crate inside it -- are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+but the versioning is not SemVer: see [Versioning](#versioning) below. Every
+kernel and userland crate still keeps its own SemVer version and its own
+changelog (`kernel/CHANGELOG.md`, `userland/<name>/CHANGELOG.md`) -- those
+track a single component's API/protocol/ABI stability. This file tracks
+"what can a user of the ZephyrLite ISO actually do that they couldn't
+before", which usually spans several crates at once and doesn't move in
+lockstep with any one of them.
 
-Userland services each have their own version and changelog under
-`userland/<name>/CHANGELOG.md`; this file covers the kernel and the project
-as a whole.
+## Versioning
+
+ZephyrLite releases are versioned `YY.MM[-{alpha|beta}].N` or
+`YY.MM-rcN`, not SemVer -- there is no meaningful "breaking change" axis at
+the OS level yet (there's one interactive user, one boot configuration, no
+external API), and this project ships multiple releases in a single day
+during this early rapid-development phase. Ubuntu-style `YY.MM` gives every
+release an immediate, human-readable sense of *when* without implying
+anything about compatibility; the trailing `.N` (or `-alpha.N`/`-beta.N`/
+`-rcN` for a release still being shaken out before it's called done) covers
+the "more than one release this month" case SemVer's own patch digit isn't
+quite shaped for here, since nothing about these releases is a "patch" to a
+previous minor/major. A release's tag is exactly its version string (no
+leading `v`) -- see [CLAUDE.md](CLAUDE.md#versioning-zephyrlite-releases-vs-every-crates-own-semver)
+for the full rationale.
+
+This scheme is orthogonal to every crate's own SemVer: a ZephyrLite release
+bumping to `26.08.1` doesn't imply anything moved in `pcern`'s or any
+userland crate's own version, and a crate bumping its own SemVer doesn't by
+itself justify a new ZephyrLite release.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-07-03
+## [26.07.1] - 2026-07-03
 
-Read, write, and edit text files: a real full-screen editor, built on top
-of write support all the way down the storage stack.
-
-### Added
-
-- ATA/IDE write support in `storage_ata` (Checkpoint P): a new
-  `STORAGE_OP_WRITE_BLOCK` protocol op alongside the existing
-  `READ_BLOCK`, backed by a real `write_sector` (`CMD_WRITE_SECTORS`,
-  correct DRQ-wait-per-word sequencing, a `STATUS_DF` write-fault check).
-- Write support in `fs_fat32` (Checkpoint Q): overwrite, growth past a
-  file's current cluster span (free-cluster allocation + FAT chain
-  extension, mirrored to both FAT copies), and brand-new file creation,
-  through a new `FS_OP_WRITE` op and a "create if missing" flag on the
-  existing open op.
-- A raw single-keystroke input mode in `console_server` (Checkpoint R):
-  `CONSOLE_OP_SET_MODE`/`CONSOLE_OP_READ_KEY`, layered onto the existing
-  line-input reader connection rather than a second one. `keyboard.rs`
-  gained Ctrl-state tracking and `0xE0`-prefixed extended-key decoding
-  (arrows, Home/End/Delete/PageUp/PageDown) to support it.
-- `shell`'s `edit <file>` command (Checkpoint S): a full-screen text
-  editor (arrow/Home/End/Delete/Backspace/insert, Ctrl-S to save, Ctrl-Q
-  to discard) built on the three additions above. The editor's core logic
-  lives in a new `libpcern::editor` module, shared with a `cap_test`
-  regression fixture so the exact code that ships is the exact code that
-  fixture exercises.
-
-### Fixed
-
-- `console_server`'s raw-mode key delivery initially held only one
-  unclaimed keystroke, overwriting (dropping) any additional ones that
-  arrived while a client was busy -- a real case for the editor, whose
-  redraw cost scales with how much has been typed so far. Replaced with a
-  32-deep queue.
-- `shell`'s `edit` command originally switched the console into raw mode
-  only after allocating the editor's buffer and opening/loading the file
-  -- a user typing the instant `edit <file>` completed could have those
-  keystrokes land while the connection was still in line mode, silently
-  absorbed by its echo/accumulate path instead of reaching the editor.
-  Fixed by switching to raw mode as the very first thing the command
-  does.
-
-## [0.3.0] - 2026-07-03
-
-The first interactive OS experience: type a command, something happens.
-
-### Added
-
-- A shared-memory buffered line-input protocol in `console_server`
-  (`CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE`), mirroring
-  `storage_ata`'s connect shape -- a client hands over a page and its own
-  reader endpoint, then requests one typed line at a time. Verified
-  against real PS/2 keystrokes injected through QEMU's monitor `sendkey`
-  command (not a synthetic in-process byte), via a new standalone
-  `keyboard_test` kernel feature/boot config and permanent fixture
-  (`console_input_test`) synchronized on a serial readiness marker rather
-  than a fixed sleep.
-- A new syscall, `SYS_SPAWN_FROM_MEMORY` (13): loads and runs a program
-  from up to 4 capability slots naming `MemoryGrant` pages the caller
-  already filled with code (e.g. read from a file), the load-from-memory
-  counterpart to the existing load-from-multiboot-module path
-  (`SYS_CREATE_TASK`). Resolves capabilities the same way every other
-  syscall argument does and always copies the bytes into freshly
-  allocated frames, never mapping a resolved grant's physical pages
-  directly into the new task. The new task gets no privilege beyond the
-  universal name-service auto-grant.
-- `userland/shell`: a minimal interactive shell reading lines from
-  `console_server`'s new input protocol and dispatching `read <file>`/
-  `run <file>` against `fs_fat32` and the new syscall -- the first thing
-  in this project you can actually type a command into and watch happen.
-- A `release.yml` GitHub Actions workflow: on publishing a GitHub release,
-  builds the production ISO from the tagged commit (`make iso`) and
-  attaches it as `pcern-<tag>-i386.iso`.
-
-### Fixed
-
-- `PageDirectory::new()` read its higher-half template page-directory
-  entries by indexing the `boot_page_directory` static directly, which
-  only works while that static's own low physical address happens to
-  still be identity-mapped under the currently active page directory --
-  true throughout every earlier caller (all of which ran during boot
-  under `boot_page_directory` itself), but not once a page directory is
-  built from inside a syscall running under some other task's own page
-  directory, which `SYS_SPAWN_FROM_MEMORY` is the first thing to actually
-  do. Fixed to read through the physical-memory map instead, which is
-  present in every address space regardless of which one is active.
-
-### Security
-
-- `console_server`'s new line-input protocol had no check that a
-  `CONSOLE_OP_SET_BUFFER`/`SET_READER`/`READ_LINE` message came from the
-  task that owned the current reader connection -- any task, including
-  one spawned with no privilege beyond the universal name-service
-  auto-grant (e.g. via the new shell's `run` command), could re-point
-  the connection at itself and receive every keystroke typed afterward
-  instead of the legitimate reader. Fixed by latching the first
-  successful `SET_BUFFER`'s kernel-attested sender id as the
-  connection's owner and ignoring these ops from any other sender.
-
-### Removed
-
-- The two endless-print kernel smoke-test tasks (`task_a`/`task_b`,
-  present since the earliest checkpoints) from every boot configuration,
-  including production -- their unthrottled console/serial spam has no
-  place in a build meant to actually be typed into. Removing them also
-  simplified every task-id-dependent build (`nameservice`'s registration
-  allowlist, `run_tests.sh`) down to one consistent numbering instead of
-  the production/test_harness builds needing +2 for their presence.
-
-## [0.2.0] - 2026-07-02
-
-Full rewrite of the original C stub into a Rust nanokernel with real
-privilege separation, a capability-based security model, and a small
-userspace ecosystem of drivers/services built on top of it.
-
-### Added
-
-- Higher-half boot with paging, a physical frame allocator, and a bump
-  kernel heap (`GlobalAlloc`).
-- Preemptive round-robin scheduler, ring-3 tasks, a TSS-based privilege
-  transition, and a syscall gate (`int 0x80`).
-- Rendezvous IPC (`send`/`recv`) and a multiboot-module task loader.
-- A capability table: per-task capability spaces (CSpaces), capability
-  derivation with badging, transfer over IPC, and revocation that cascades
-  to every capability derived from the revoked one. IPC addressing moved
-  from raw task IDs to capability slots; memory-mapped I/O and IRQ
-  registration became capability-mediated (`MemoryGrant`, `IrqControl`)
-  instead of a single `is_driver` flag and a hardcoded allowlist.
-- A name service (`userland/nameservice`) as the one piece of discovery
-  every task gets for free, replacing hand-wired capability grants for
-  everything except a task's initial hardware/name-service capabilities.
-- Userspace drivers/services: `console_server` (VGA/ANSI text console +
-  keyboard, moved out of the kernel), `storage_ata` (polling ATA/IDE PIO
-  driver serving block reads over a shared-memory grant), `fs_fat32`
-  (read-only FAT32 filesystem server on top of `storage_ata`).
-- `userland/libpcern`, a shared `no_std` syscall/protocol binding crate
-  used by every userland program above.
-- `userland/cap_test`, a set of regression fixtures covering capability
-  transfer/badging/revocation, shared-memory grants, and the
-  storage/filesystem protocols end to end.
-- An automated test harness (`make test`): a second kernel build
-  (`--features test_harness`) that spawns every `cap_test` fixture
-  alongside the normal service set, boots headlessly in QEMU against a
-  generated FAT32 test image, and checks every fixture's exit code and
-  that no unexpected interrupt vectors fired.
-- CI (GitHub Actions) running `make iso` and `make test` on every push/PR
-  against `main`.
+The first release under the ZephyrLite name. No functional change from the
+0.4.0 pCern kernel + userland set (Phase 7: read, write, and edit text
+files) -- this release is the repository restructuring itself:
 
 ### Changed
 
-- `sys_debug_write` (a syscall that let any ring-3 task write arbitrary
-  kernel memory to serial) was retired once the console server could take
-  over all userspace output.
-- The kernel's own keyboard-echo path was retired once `console_server`
-  owned the keyboard.
+- The kernel moved from the repo root into `kernel/` (its own `Cargo.toml`,
+  `src/`, target spec, linker script, and every `grub*.cfg`), freeing the
+  repo root for the OS/distro level this file and the root README now
+  occupy. `rust-toolchain.toml` stays at the repo root, since every crate
+  in this monorepo -- kernel and userland alike -- has always relied on
+  it via `rustup`'s upward directory search, not just the kernel.
+- `userland/` reorganized to make the driver/service/program distinction
+  visible in the directory tree itself, instead of only in prose:
+  `userland/drivers/{console_server,storage_ata}` (own hardware
+  capabilities -- `MemoryGrant`/`IrqControl`/port I/O),
+  `userland/services/{nameservice,fs_fat32}` (no hardware capabilities of
+  their own), `userland/bin/shell` (the one user-facing program). No code
+  was split -- `console_server` still bundles VGA/keyboard I/O with its
+  ANSI/line-discipline logic in one crate, the same way a Unix tty driver
+  legitimately combines both; see
+  [CLAUDE.md](CLAUDE.md#driver-vs-utility-taxonomy-in-userland) for the
+  reasoning. `userland/libpcern` (shared library) and `userland/cap_test`
+  (regression fixtures, never booted normally) were left where they were --
+  neither is a driver, a service, or a user-facing program.
+- The production ISO and its release pipeline (`.github/workflows/release.yml`)
+  now build and publish `zephyrlite-<tag>-i386.iso` instead of
+  `pcern-<tag>-i386.iso`; the kernel binary inside it is still named
+  `pcern.elf` and the GRUB menu entry reads "ZephyrLite (pCern kernel)".
+  Internal test-harness ISOs (`iso-test`/`iso-keytest`/`iso-rawtest`/
+  `iso-editortest`) keep their existing `pcern-*` names -- they're build
+  artifacts, never released.
+- Adopted the versioning scheme documented above for OS-level releases,
+  replacing the kernel's own SemVer as what a GitHub release tag names.
 
-### Fixed
-
-- `switch_to` wasn't saving/restoring `EFLAGS` across a context switch.
-- `sys_debug_write` allowed an arbitrary kernel-memory read from ring 3
-  (fixed by retiring the syscall entirely, see above).
-- An unhandled exception on a ring-3 task would halt the entire kernel
-  instead of just that task.
-- `block_current`/`exit_current` could panic if they emptied the ready
-  queue.
-- `exit_current` didn't clean up a task's pending IPC entries, leaking
-  state on every task exit.
-- A `map_page` bug leaked the `PAGE_USER` bit across an unrelated shared
-  4 MiB region.
-- An alignment-padding sliver in the heap allocator could be smaller than
-  the smallest trackable free block, corrupting the free list.
-- `total_memory_bytes` silently returned `0` instead of failing loudly
-  when multiboot didn't report `FLAG_MEM`.
-- The TSS's `esp0` field started at `0`, a landmine for the first ring-3
-  to ring-0 transition.
-- `ping.asm`/`pong.asm` (an early IPC demo) silently completed only one
-  round-trip instead of five, since Phase 3, due to a clobbered register
-  across a `call` -- caught while adding stricter round-by-round
-  verification, moot once those demo programs were removed as redundant
-  with `cap_test`'s fixtures.
-
-### Removed
-
-- `ping.asm`/`pong.asm`, the original two-task IPC demo, once
-  `userland/cap_test`'s fixtures covered the same ground more thoroughly.
-- A handful of standalone `.asm` verification fixtures at the userland
-  root (`driver_test.asm`, `irq_test.asm`, `nondriver_test.asm`,
-  `ring3_test.asm`, `ring3_cli_test.asm`) left over from early checkpoints;
-  all of them exercised syscalls or mechanisms (`sys_debug_write`,
-  `is_driver`) retired long before this release.
-
-## [0.1.0] - 2023-01-31
-
-Initial "pikokernel" exercise: a minimal multiboot-compliant kernel written
-in C, booting to a hardcoded VGA text message under QEMU. Tagged
-pre-release; superseded entirely by the 0.2.0 Rust rewrite.
+No kernel or userland crate's own version changed as part of this release
+-- every crate keeps the version it reached in Phase 7 (0.4.0). See
+`kernel/CHANGELOG.md` for the kernel's version history through 0.4.0, prior
+to this split.

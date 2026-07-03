@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `console_server::keyboard`'s values exactly since they cross the wire.
 - A new `editor` module (Checkpoint S): `Editor`, a full-screen text
   editor's core logic (cursor-tracked buffer, key application, ANSI
-  redraw), shared between `userland/shell`'s `edit` command and
+  redraw), shared between `userland/bin/shell`'s `edit` command and
   `userland/cap_test`'s `editor_input_test` regression fixture.
 
 ## [0.2.0] - 2026-07-03

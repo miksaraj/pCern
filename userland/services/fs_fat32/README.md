@@ -19,7 +19,7 @@ physical address directly, only through `storage_ata`. Internally, it also
 creates a second, private endpoint (via `SYS_ENDPOINT_CREATE`) just for
 receiving `storage_ata`'s replies, kept separate from CSlot 2 so a
 client's request can never race a pending storage reply on the same
-inbox -- see [CLAUDE.md](../../CLAUDE.md)'s note on why one inbox isn't
+inbox -- see [CLAUDE.md](../../../CLAUDE.md)'s note on why one inbox isn't
 automatically safe for two roles.
 
 ## Scope (deliberately narrow)

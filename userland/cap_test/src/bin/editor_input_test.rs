@@ -3,11 +3,11 @@
 //! `sendkey` monitor command (see run_editor_test.sh) -- the same
 //! "prove it for real" approach every input-driven checkpoint in this
 //! project uses. Uses `libpcern::editor::Editor` directly (the exact same
-//! type `userland/shell`'s `edit` command drives), so this fixture proves
+//! type `userland/bin/shell`'s `edit` command drives), so this fixture proves
 //! the actual shipping editor logic, not a re-implementation that could
 //! quietly drift from it -- only the surrounding protocol glue (open/
 //! load/save via fs_fat32, arm/read via console_server's raw mode) is
-//! duplicated from `userland/shell/src/editor.rs`, and it's a thin,
+//! duplicated from `userland/bin/shell/src/editor.rs`, and it's a thin,
 //! direct call to the same libpcern helpers either way.
 //!
 //! Scripted edit: types "hello", moves the cursor left twice (to exercise
@@ -115,7 +115,7 @@ pub extern "C" fn _start() -> ! {
     let first_key = libpcern::recv(reader_slot).w0;
 
     // Redraws after every applied key, exactly mirroring
-    // userland/shell/src/editor.rs's real usage pattern -- a redraw's
+    // userland/bin/shell/src/editor.rs's real usage pattern -- a redraw's
     // cost scales with content typed so far (see
     // libpcern::editor::Editor::redraw), so exercising that same
     // per-keystroke redraw here is what actually proves console_server's

@@ -1,6 +1,6 @@
 //! Phase 7, Checkpoint S: a minimal full-screen text editor's core logic
 //! (cursor-tracked in-memory buffer + key application + redraw), shared
-//! between `userland/shell` (the production `edit <file>` command) and
+//! between `userland/bin/shell` (the production `edit <file>` command) and
 //! `userland/cap_test`'s `editor_input_test` regression fixture, so the
 //! exact code that ships is the exact code the fixture exercises rather
 //! than a re-implementation that could quietly drift from it.

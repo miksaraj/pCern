@@ -3,7 +3,11 @@ name: Release
 # Fires when a release is *published* (not on tag push) -- a tag push
 # happens before release notes are finalized, so building from a
 # half-drafted release is the wrong moment. A published release is the
-# deliberate, human-confirmed trigger for "ship this build".
+# deliberate, human-confirmed trigger for "ship this build". The release
+# tag names a ZephyrLite OS version (see CHANGELOG.md's versioning
+# scheme), not the kernel's own SemVer -- this workflow doesn't assume
+# any particular tag shape, it just uses whatever tag_name the release
+# was published under.
 on:
   release:
     types: [published]
@@ -38,9 +42,9 @@ jobs:
         run: make iso
 
       - name: Rename ISO to include the release tag
-        run: cp pcern-i386.iso "pcern-${{ github.event.release.tag_name }}-i386.iso"
+        run: cp zephyrlite-i386.iso "zephyrlite-${{ github.event.release.tag_name }}-i386.iso"
 
       - name: Attach ISO to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "pcern-${{ github.event.release.tag_name }}-i386.iso" --clobber --repo "${{ github.repository }}"
+        run: gh release upload "${{ github.event.release.tag_name }}" "zephyrlite-${{ github.event.release.tag_name }}-i386.iso" --clobber --repo "${{ github.repository }}"

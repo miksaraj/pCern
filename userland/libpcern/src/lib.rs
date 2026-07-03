@@ -51,12 +51,12 @@ pub const KERNEL_TASK_ID: u32 = 0;
 /// implicitly inherit fds 0/1/2.
 pub const NAMESERVICE_SLOT: u32 = 1;
 
-/// Name-service wire protocol (see userland/nameservice): `w0`=op,
+/// Name-service wire protocol (see userland/services/nameservice): `w0`=op,
 /// `w1`/`w2`=an 8-byte name packed via `pack_name`.
 pub const NS_OP_REGISTER: u32 = 1;
 pub const NS_OP_LOOKUP: u32 = 2;
 
-/// Storage-service wire protocol (see userland/storage_ata). A client
+/// Storage-service wire protocol (see userland/drivers/storage_ata). A client
 /// connects once (`storage_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for the driver to read sectors into, and its
 /// own inbox as the reply-to address, since the 3-word/1-transfer budget
@@ -101,7 +101,7 @@ pub fn storage_write_block(storage_slot: u32, my_inbox_slot: u32, lba: u32) -> b
     recv(my_inbox_slot).w0 == 1
 }
 
-/// Filesystem-service wire protocol (see userland/fs_fat32). Setup mirrors
+/// Filesystem-service wire protocol (see userland/services/fs_fat32). Setup mirrors
 /// storage's (`fs_connect`, same SET_BUFFER/SET_REPLY two-message pattern
 /// for the same reason -- one transfer per message). Opening a file needs
 /// an 11-byte fixed-width 8.3 name (see `fat_pack_name`), one byte more
@@ -209,7 +209,7 @@ pub fn fs_write(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 
     recv(my_inbox_slot).w0
 }
 
-/// Console *input* wire protocol (see userland/console_server). A reader
+/// Console *input* wire protocol (see userland/drivers/console_server). A reader
 /// connects once (`console_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
 /// line's bytes into, and its own dedicated line-ready endpoint (never
@@ -312,7 +312,7 @@ pub fn console_read_key(console_slot: u32, reader_slot: u32) -> u32 {
 
 /// Wire protocol other tasks use to reach the screen: `send(console_slot,
 /// OP_PUTCHAR, byte, 0, 0)`, one call per character -- see
-/// userland/console_server's own README for the full protocol.
+/// userland/drivers/console_server's own README for the full protocol.
 pub const OP_PUTCHAR: u32 = 0;
 
 /// Sends `s` to `console_slot` one byte at a time via `OP_PUTCHAR`. Used

@@ -1,17 +1,18 @@
 CARGO := cargo
 PROFILE := release
 TARGET := i686-pcern
-KERNEL_BIN := target/$(TARGET)/$(PROFILE)/pcern
+KERNEL_DIR := kernel
+KERNEL_BIN := $(KERNEL_DIR)/target/$(TARGET)/$(PROFILE)/pcern
 
 OBJCOPY := objcopy
 USERLAND_DIR := userland
 
-CONSOLE_SERVER_DIR := $(USERLAND_DIR)/console_server
+CONSOLE_SERVER_DIR := $(USERLAND_DIR)/drivers/console_server
 CONSOLE_SERVER_TARGET := i686-pcern-user
 CONSOLE_SERVER_ELF := $(CONSOLE_SERVER_DIR)/target/$(CONSOLE_SERVER_TARGET)/$(PROFILE)/console_server
 CONSOLE_SERVER_BIN := $(USERLAND_DIR)/console_server.bin
 
-NAMESERVICE_DIR := $(USERLAND_DIR)/nameservice
+NAMESERVICE_DIR := $(USERLAND_DIR)/services/nameservice
 NAMESERVICE_TARGET := i686-pcern-user
 NAMESERVICE_ELF := $(NAMESERVICE_DIR)/target/$(NAMESERVICE_TARGET)/$(PROFILE)/nameservice
 NAMESERVICE_BIN := $(USERLAND_DIR)/nameservice.bin
@@ -24,17 +25,17 @@ NAMESERVICE_BIN := $(USERLAND_DIR)/nameservice.bin
 CAP_TEST_DIR := $(USERLAND_DIR)/cap_test
 CAP_TEST_TARGET := i686-pcern-user
 
-STORAGE_ATA_DIR := $(USERLAND_DIR)/storage_ata
+STORAGE_ATA_DIR := $(USERLAND_DIR)/drivers/storage_ata
 STORAGE_ATA_TARGET := i686-pcern-user
 STORAGE_ATA_ELF := $(STORAGE_ATA_DIR)/target/$(STORAGE_ATA_TARGET)/$(PROFILE)/storage_ata
 STORAGE_ATA_BIN := $(USERLAND_DIR)/storage_ata.bin
 
-FS_FAT32_DIR := $(USERLAND_DIR)/fs_fat32
+FS_FAT32_DIR := $(USERLAND_DIR)/services/fs_fat32
 FS_FAT32_TARGET := i686-pcern-user
 FS_FAT32_ELF := $(FS_FAT32_DIR)/target/$(FS_FAT32_TARGET)/$(PROFILE)/fs_fat32
 FS_FAT32_BIN := $(USERLAND_DIR)/fs_fat32.bin
 
-SHELL_DIR := $(USERLAND_DIR)/shell
+SHELL_DIR := $(USERLAND_DIR)/bin/shell
 SHELL_TARGET := i686-pcern-user
 SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
 SHELL_BIN := $(USERLAND_DIR)/shell.bin
@@ -43,16 +44,16 @@ CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
 
-CFG := grub.cfg
+CFG := $(KERNEL_DIR)/grub.cfg
 ISO_PATH := iso
 BOOT_PATH := $(ISO_PATH)/boot
 GRUB_PATH := $(BOOT_PATH)/grub
-ISO := pcern-i386.iso
+ISO := zephyrlite-i386.iso
 
 # Test harness (see `make test`): a separate kernel build (--features
 # test_harness) + grub config + ISO, so the production `iso`/`kernel`
 # targets above are completely untouched by any of this.
-CFG_TEST := grub-test.cfg
+CFG_TEST := $(KERNEL_DIR)/grub-test.cfg
 ISO_TEST_PATH := iso-test
 BOOT_TEST_PATH := $(ISO_TEST_PATH)/boot
 GRUB_TEST_PATH := $(BOOT_TEST_PATH)/grub
@@ -63,7 +64,7 @@ ISO_TEST := pcern-test-i386.iso
 # both the production and the shared iso-test builds above -- see
 # console_input_test.rs's doc comment for why this fixture can't share
 # either of those.
-CFG_KEYTEST := grub-keytest.cfg
+CFG_KEYTEST := $(KERNEL_DIR)/grub-keytest.cfg
 ISO_KEYTEST_PATH := iso-keytest
 BOOT_KEYTEST_PATH := $(ISO_KEYTEST_PATH)/boot
 GRUB_KEYTEST_PATH := $(BOOT_KEYTEST_PATH)/grub
@@ -72,7 +73,7 @@ ISO_KEYTEST := pcern-keytest-i386.iso
 # Phase 7, Checkpoint R's raw-input test harness: its own standalone
 # kernel build (--features raw_input_test) + grub config + ISO, same
 # reason as keyboard_test's above -- see raw_input_test.rs's doc comment.
-CFG_RAWTEST := grub-rawtest.cfg
+CFG_RAWTEST := $(KERNEL_DIR)/grub-rawtest.cfg
 ISO_RAWTEST_PATH := iso-rawtest
 BOOT_RAWTEST_PATH := $(ISO_RAWTEST_PATH)/boot
 GRUB_RAWTEST_PATH := $(BOOT_RAWTEST_PATH)/grub
@@ -84,7 +85,7 @@ ISO_RAWTEST := pcern-rawtest-i386.iso
 # editor_input_test.rs's doc comment. Unlike keyboard_test/raw_input_test,
 # this one needs the shared FAT32 test image attached (it exercises real
 # fs_fat32 write support), same as the main iso-test build.
-CFG_EDITORTEST := grub-editortest.cfg
+CFG_EDITORTEST := $(KERNEL_DIR)/grub-editortest.cfg
 ISO_EDITORTEST_PATH := iso-editortest
 BOOT_EDITORTEST_PATH := $(ISO_EDITORTEST_PATH)/boot
 GRUB_EDITORTEST_PATH := $(BOOT_EDITORTEST_PATH)/grub
@@ -107,7 +108,7 @@ all: iso
 
 .PHONY: kernel
 kernel:
-	$(CARGO) build --$(PROFILE)
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE)
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
@@ -174,7 +175,7 @@ iso: kernel userland
 
 .PHONY: kernel-test
 kernel-test:
-	$(CARGO) build --$(PROFILE) --features test_harness
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features test_harness
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: iso-test
@@ -195,7 +196,7 @@ iso-test: kernel-test userland cap_test
 
 .PHONY: kernel-keytest
 kernel-keytest:
-	$(CARGO) build --$(PROFILE) --features keyboard_test
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features keyboard_test
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: iso-keytest
@@ -216,7 +217,7 @@ test-keyboard: iso-keytest
 
 .PHONY: kernel-rawtest
 kernel-rawtest:
-	$(CARGO) build --$(PROFILE) --features raw_input_test
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features raw_input_test
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: iso-rawtest
@@ -237,7 +238,7 @@ test-raw-input: iso-rawtest
 
 .PHONY: kernel-editortest
 kernel-editortest:
-	$(CARGO) build --$(PROFILE) --features editor_test
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features editor_test
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: iso-editortest
@@ -278,7 +279,7 @@ run: iso
 
 .PHONY: clean
 clean:
-	$(CARGO) clean
+	cd $(KERNEL_DIR) && $(CARGO) clean
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) clean
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean

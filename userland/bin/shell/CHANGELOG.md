@@ -38,5 +38,5 @@ Initial release.
 - Two endpoints, not one: a dedicated inbox for the synchronous
   name-service/`fs_fat32` request/reply round trips, and a separate one
   for `console_server`'s asynchronous "line ready" notifications -- see
-  [CLAUDE.md](../../CLAUDE.md)'s note on why one inbox isn't
+  [CLAUDE.md](../../../CLAUDE.md)'s note on why one inbox isn't
   automatically safe for two roles.

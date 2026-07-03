@@ -55,9 +55,9 @@ it, checking it, then reverting those edits before committing (backups
 kept in a scratch directory in the meantime, never in the repo). `make
 test` replaced most of that need for `userland/cap_test`'s fixtures with a
 standing, permanent (if separate) boot configuration -- see
-`src/main.rs`'s `test_harness_spawn`, `grub-test.cfg`, and `run_tests.sh`.
-Prefer extending that harness over hand-editing the production boot
-sequence when adding a new regression test.
+`kernel/src/main.rs`'s `test_harness_spawn`, `kernel/grub-test.cfg`, and
+`run_tests.sh`. Prefer extending that harness over hand-editing the
+production boot sequence when adding a new regression test.
 
 ## Design decisions worth knowing about
 
@@ -149,9 +149,9 @@ comment -- never just editing the version number.
 
 ## Where things live, and why one repo
 
-pCern is a monorepo: the kernel (`src/`) and every userland service
-(`userland/*`) live in one repository, each userland service as its own
-Cargo crate with its own `Cargo.toml`/version/README/CHANGELOG. That's a
+ZephyrLite is a monorepo: the pCern kernel (`kernel/`) and every userland
+service (`userland/*`) live in one repository, each userland service as its
+own Cargo crate with its own `Cargo.toml`/version/README/CHANGELOG. That's a
 deliberate choice, not just where things happened to end up:
 
 - The syscall ABI and IPC wire formats are still moving (three ABI-shaping
@@ -169,13 +169,148 @@ deliberate choice, not just where things happened to end up:
   mechanical `git subtree split`, not a redesign.
 
 Revisit this if either of those conditions actually shows up -- don't
-split preemptively.
+split preemptively. Note that this is about *separate repositories*, not
+directory layout within this one -- the `kernel/` subdirectory move
+(below) doesn't touch this reasoning at all, since it's still one repo,
+one build, one set of PRs.
+
+### The kernel moved into `kernel/`, and why
+
+Through Phase 6 (0.3.0), the kernel's `Cargo.toml`/`src/`/build config lived
+directly at the repo root, and the repo as a whole was still identified as
+"pCern" -- reasonable while the only thing worth naming was the kernel
+itself. Phase 7 (0.4.0) made the OS genuinely usable (read, write, and edit
+files with a real full-screen editor) -- past that point, the repo root is
+the OS/distro's identity, not the kernel's, and "pCern" (the kernel) and
+whatever the OS as a whole is called are two different things that
+shouldn't fight over the same root directory. So: `kernel/` now holds
+everything specific to building/booting the `pcern` kernel crate
+(`Cargo.toml`, `Cargo.lock`, `src/`, `.cargo/config.toml`,
+`i686-pcern.json`, `linker.ld`, every `grub*.cfg`), and the repo root holds
+the OS-level `README.md`/`CHANGELOG.md`/`VERSION` -- this file (CLAUDE.md,
+development history for the whole monorepo) stays at the root since it's
+never been kernel-specific.
+
+One file deliberately did **not** move: `rust-toolchain.toml` stays at the
+repo root. It was never a kernel-specific file -- every userland crate has
+always relied on `rustup`'s upward directory search finding the *root*
+copy (none of them ship their own), so moving it into `kernel/` would have
+silently broken every userland build's ability to find the pinned nightly
+channel while leaving the kernel's own build looking fine. (This is exactly
+what happened during the migration itself before it was caught: builds run
+from inside a userland crate's directory fell back to whatever `stable`
+toolchain happened to be `rustup`'s default, which can't process the
+`-Zbuild-std` flag every crate here needs -- a build failure specific to
+the reorg, not a real regression in any crate.) The lesson generalizes:
+before moving a config file that governs a build, check whether anything
+*outside* the thing being moved was silently relying on it living where it
+was.
+
+The `Makefile` stays at the repo root too (it already orchestrates kernel
++ userland together, `cd`-ing into whichever crate's directory it needs
+per target) -- only its `KERNEL_DIR`/`KERNEL_BIN`/`CFG*` variables needed
+updating to point at `kernel/`.
+
+### Driver vs. utility taxonomy in userland
+
+Once the OS was something a user could actually type into and expect
+persistent results from (Phase 7), it became worth asking plainly which
+`userland/` crates are drivers (own real hardware), which are services
+(no hardware, reachable only by name), and which are just programs a user
+runs -- rather than leaving that distinction implicit in each crate's own
+README. The audit, and what came of it:
+
+- **`console_server`** owns real hardware (VGA MMIO via a `MemoryGrant`,
+  the keyboard IRQ via `IrqControl`) *and* implements the line-discipline/
+  echo state machine and the ANSI/VT100 escape parser (`ansi.rs`) on top,
+  in the same crate. This looks at first glance like it should split into
+  a hardware piece and a protocol piece -- but a real Unix tty driver
+  combines exactly these two responsibilities (raw device I/O plus line
+  discipline plus terminal emulation) in one layer for a reason: the
+  policy of "what counts as a completed line", "what does Ctrl-C do", or
+  here, "what does a redraw's CUP/ED/EL sequence do to the actual VGA
+  buffer" is tightly coupled to the hardware it's driving, and splitting
+  it into a separate crate would mean two crates renegotiating a private
+  protocol for no external consumer -- nothing else in this project (or
+  plausibly ever) needs raw scancode access without also wanting a line
+  discipline on top. **Decision: `console_server` is not code-split.** It
+  moved into `userland/drivers/` as-is; classified as a driver because
+  hardware ownership is what makes it privileged, even though most of its
+  line count is protocol logic, not device I/O.
+- **`storage_ata`** owns hardware (port I/O via the `allowed_ports`
+  mechanism) and nothing else -- a pure driver, moved to
+  `userland/drivers/storage_ata`.
+- **`nameservice`** and **`fs_fat32`** hold no hardware capabilities at
+  all -- `fs_fat32` reaches disk only by being `storage_ata`'s client over
+  ordinary IPC, the same access any other task could request. Both moved
+  to `userland/services/`.
+- **`shell`** (including its `edit` full-screen-editor command) never
+  touches a scancode or a port directly -- it only ever calls
+  `console_read_key`/`console_read_line` and gets back an already-decoded
+  value. It's unambiguously a user-facing program, not a driver or a
+  headless service, so it moved to `userland/bin/shell` on its own.
+- **`libpcern`** (a library, never a task -- no `_start`) and
+  **`cap_test`** (regression fixtures, never part of a normal boot) are
+  neither drivers, services, nor programs, so neither moved under
+  `drivers/`/`services/`/`bin/` -- they stayed where they were.
+
+If a future userland crate mixes hardware ownership with a large amount of
+non-hardware logic the way `console_server` does, apply the same test
+before splitting it: would the split produce two crates with an actual
+outside consumer for the boundary between them, or just two crates that
+still only ever talk to each other?
+
+### Versioning: ZephyrLite releases vs. every crate's own SemVer
+
+Before Phase 7's restructuring, one version number (the kernel's,
+`Cargo.toml`'s `pcern` version) stood in for "the project's version",
+because the kernel and the shippable thing were the same identity. Once
+the repo root became the OS's own identity (ZephyrLite) rather than the
+kernel's, that stopped making sense -- a kernel SemVer bump and a
+user-visible OS release are different events that don't have to coincide,
+and forcing them to would mean either bumping the kernel's SemVer for
+changes that are pure userland (most of Phase 7) or bumping some "project"
+number that isn't really any single crate's.
+
+**The fix: two completely separate versioning axes.**
+
+- Every kernel and userland crate keeps its own SemVer
+  (`Cargo.toml`/`CHANGELOG.md` per crate, unchanged from how this project
+  has always done it) -- this tracks that one component's own API/ABI/
+  protocol stability.
+- **ZephyrLite**, the OS as a whole, is versioned separately:
+  `YY.MM[-{alpha|beta}].N` or `YY.MM-rcN` (e.g. `26.07.1`, `26.08-beta.2`,
+  `26.09-rc1`), tracked in the root `VERSION` file and `CHANGELOG.md`, and
+  is what a GitHub release's tag actually names. This is deliberately not
+  SemVer: SemVer's whole point is signaling breaking-vs-compatible changes
+  across a versioned *interface*, and there isn't one at the OS level yet
+  (one interactive user, one boot configuration, nothing external
+  integrates against "the OS" as an API). `YY.MM` (Ubuntu's own scheme)
+  gives every release an immediately readable sense of *when*, which is
+  what actually matters at this project's pace -- and the trailing
+  `.N`/`-alpha.N`/`-beta.N`/`-rcN` covers same-month, even same-day,
+  multiple releases (a real possibility during this project's current
+  rapid-iteration phase) without contorting SemVer's patch digit into
+  meaning "the Nth release today", which isn't what it means anywhere
+  else.
+
+A ZephyrLite release bumping (say `26.07.1` -> `26.07.2`) does **not**
+imply any crate's own version changed, and a crate bumping its own SemVer
+does not by itself justify a new ZephyrLite release -- the two are
+tracked, decided, and bumped independently. When both are changing in the
+same PR (e.g. this restructuring), say so explicitly in each affected
+CHANGELOG rather than letting a reader infer a relationship that isn't
+there.
 
 ## Where to look next
 
-- [README.md](README.md) -- what the project is, how to build/run/test it.
-- [CHANGELOG.md](CHANGELOG.md) -- what's shipped so far, in Keep a Changelog
-  format.
+- [README.md](README.md) -- what the OS is, how to build/run/test it.
+- [CHANGELOG.md](CHANGELOG.md) -- ZephyrLite's OS-level release history,
+  in Keep a Changelog format (see its own Versioning section for the
+  scheme).
+- [kernel/README.md](kernel/README.md) and
+  [kernel/CHANGELOG.md](kernel/CHANGELOG.md) -- the pCern kernel crate's
+  own docs and SemVer version history.
 - `userland/<name>/README.md` and `CHANGELOG.md` -- per-service protocol
   and design notes, and per-service version history.
 - Code comments at the top of each module/file -- these carry the

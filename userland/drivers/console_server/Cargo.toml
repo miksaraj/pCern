@@ -1,14 +1,14 @@
 [package]
-name = "shell"
-version = "0.2.0"
+name = "console_server"
+version = "0.3.0"
 edition = "2021"
 
 [[bin]]
-name = "shell"
+name = "console_server"
 path = "src/main.rs"
 
 [dependencies]
-libpcern = { path = "../libpcern" }
+libpcern = { path = "../../libpcern" }
 
 [profile.dev]
 panic = "abort"

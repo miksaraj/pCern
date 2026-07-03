@@ -17,7 +17,7 @@ else (`console`, `fs`) is looked up by name.
 `fs_fat32` request/reply round trips. A **separate** endpoint
 (`libpcern::endpoint_create()`) is used only for `console_server`'s
 asynchronous "line ready" notifications. This isn't incidental -- it's
-the exact hazard [CLAUDE.md](../../CLAUDE.md)'s "one inbox is not
+the exact hazard [CLAUDE.md](../../../CLAUDE.md)'s "one inbox is not
 automatically safe for two roles" documents: a second typed-ahead line
 completing while the shell is still blocked waiting on an `fs_open`/
 `fs_read` reply would otherwise race that reply on a shared inbox.

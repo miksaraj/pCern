@@ -1,14 +1,14 @@
 [package]
-name = "nameservice"
-version = "0.1.0"
+name = "storage_ata"
+version = "0.2.0"
 edition = "2021"
 
 [[bin]]
-name = "nameservice"
+name = "storage_ata"
 path = "src/main.rs"
 
 [dependencies]
-libpcern = { path = "../libpcern" }
+libpcern = { path = "../../libpcern" }
 
 [profile.dev]
 panic = "abort"

@@ -69,6 +69,15 @@ BOOT_KEYTEST_PATH := $(ISO_KEYTEST_PATH)/boot
 GRUB_KEYTEST_PATH := $(BOOT_KEYTEST_PATH)/grub
 ISO_KEYTEST := pcern-keytest-i386.iso
 
+# Phase 7, Checkpoint R's raw-input test harness: its own standalone
+# kernel build (--features raw_input_test) + grub config + ISO, same
+# reason as keyboard_test's above -- see raw_input_test.rs's doc comment.
+CFG_RAWTEST := grub-rawtest.cfg
+ISO_RAWTEST_PATH := iso-rawtest
+BOOT_RAWTEST_PATH := $(ISO_RAWTEST_PATH)/boot
+GRUB_RAWTEST_PATH := $(BOOT_RAWTEST_PATH)/grub
+ISO_RAWTEST := pcern-rawtest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -133,6 +142,8 @@ cap_test:
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/console_input_test $(USERLAND_DIR)/console_input_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/raw_input_test $(USERLAND_DIR)/raw_input_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
 
 .PHONY: iso
@@ -189,10 +200,32 @@ iso-keytest: kernel-keytest userland cap_test
 test-keyboard: iso-keytest
 	./run_console_input_test.sh $(ISO_KEYTEST)
 
+.PHONY: kernel-rawtest
+kernel-rawtest:
+	$(CARGO) build --$(PROFILE) --features raw_input_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-rawtest
+iso-rawtest: kernel-rawtest userland cap_test
+	$(MKDIR) $(GRUB_RAWTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_RAWTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_RAWTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_RAWTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_RAWTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_RAWTEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/raw_input_test.bin $(BOOT_RAWTEST_PATH)/raw_input_test.bin
+	$(CP) $(CFG_RAWTEST) $(GRUB_RAWTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_RAWTEST) $(ISO_RAWTEST_PATH)
+
+.PHONY: test-raw-input
+test-raw-input: iso-rawtest
+	./run_raw_input_test.sh $(ISO_RAWTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
 	$(MAKE) test-keyboard
+	$(MAKE) test-raw-input
 
 .PHONY: test-fat32-image
 test-fat32-image: cap_test
@@ -216,4 +249,4 @@ clean:
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)

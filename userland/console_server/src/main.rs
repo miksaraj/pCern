@@ -126,11 +126,40 @@ pub extern "C" fn _start() -> ! {
     let mut line_ready = false;
     let mut line_len: usize = 0;
 
+    // Phase 7, Checkpoint R: raw single-keystroke mode for a full-screen
+    // editor, layered onto the exact same reader connection/ownership
+    // latch above rather than a second one -- see the module doc comment.
+    // `raw_mode` off (the default) leaves every line-mode behavior above
+    // completely unchanged. `key_armed` mirrors `armed`'s role but for
+    // `CONSOLE_OP_READ_KEY`: the next decoded key, while raw, is delivered
+    // immediately instead of being echoed/accumulated into a line.
+    let mut raw_mode = false;
+    let mut key_armed = false;
+
     loop {
         let r = libpcern::recv(MY_INBOX_SLOT);
         if r.sender == libpcern::KERNEL_TASK_ID {
             let scancode = r.w1 as u8;
-            if let Some(ascii) = decoder.feed(scancode) {
+            if let Some(key) = decoder.feed(scancode) {
+                if raw_mode {
+                    // No echo, no line accumulation -- a raw-mode client
+                    // (the editor) owns the screen and redraws itself via
+                    // ansi.rs's cursor-addressing escapes.
+                    if key_armed && reader_slot != 0 {
+                        libpcern::send(reader_slot, key, 0, 0, 0);
+                        key_armed = false;
+                    }
+                    continue;
+                }
+                // Line mode only ever dealt in plain ASCII -- codes >= 256
+                // (arrows etc.) have no ASCII form and are silently
+                // dropped here, the same as they always were before this
+                // checkpoint (previously undecoded scancodes returned
+                // `None` and never reached this point at all).
+                if key >= 256 {
+                    continue;
+                }
+                let ascii = key as u8;
                 ansi.feed(ascii, &mut writer);
                 writer.sync_hardware_cursor();
 
@@ -214,6 +243,18 @@ pub extern "C" fn _start() -> ! {
                         } else {
                             armed = true;
                         }
+                    }
+                }
+                libpcern::CONSOLE_OP_SET_MODE => {
+                    // Same ownership check as every other CONSOLE_OP_* --
+                    // only the latched reader can flip modes.
+                    if reader_owner == r.sender {
+                        raw_mode = r.w1 != 0;
+                    }
+                }
+                libpcern::CONSOLE_OP_READ_KEY => {
+                    if reader_owner == r.sender && reader_slot != 0 {
+                        key_armed = true;
                     }
                 }
                 _ => {}

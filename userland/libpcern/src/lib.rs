@@ -239,11 +239,35 @@ pub fn fs_write(fs_slot: u32, my_inbox_slot: u32, offset: u32, len: u32) -> u32 
 pub const CONSOLE_OP_SET_BUFFER: u32 = 1;
 pub const CONSOLE_OP_SET_READER: u32 = 2;
 pub const CONSOLE_OP_READ_LINE: u32 = 3;
+/// Switches the connection between line mode (`w1`=0, the default -- a
+/// complete Enter-terminated line at a time, unchanged from Checkpoint L)
+/// and raw mode (`w1`=1: every decoded key delivered immediately via
+/// `CONSOLE_OP_READ_KEY`, no echo, no line accumulation). Phase 7,
+/// Checkpoint R, for the full-screen editor -- gated by the same
+/// `reader_owner` ownership check as every other `CONSOLE_OP_*`.
+pub const CONSOLE_OP_SET_MODE: u32 = 4;
+/// Requests the next decoded key while in raw mode; the reply's `w0` is a
+/// tagged value (see `console_server::keyboard`'s `KEY_*` constants for
+/// the `>= 256` non-ASCII ones, plain ASCII otherwise).
+pub const CONSOLE_OP_READ_KEY: u32 = 5;
 
 /// Bytes typed before Enter beyond this are dropped (not buffered, and
 /// not an error) -- bounded well under the shared page's 4096-byte
 /// capacity for headroom; see console_server's own accumulator.
 pub const CONSOLE_LINE_MAX: usize = 256;
+
+/// Tagged non-ASCII key values a `CONSOLE_OP_READ_KEY` reply's `w0` can
+/// carry -- must match `console_server::keyboard`'s `KEY_*` constants
+/// exactly, since they're the same values crossing the wire.
+pub const KEY_UP: u32 = 256;
+pub const KEY_DOWN: u32 = 257;
+pub const KEY_LEFT: u32 = 258;
+pub const KEY_RIGHT: u32 = 259;
+pub const KEY_HOME: u32 = 260;
+pub const KEY_END: u32 = 261;
+pub const KEY_DELETE: u32 = 262;
+pub const KEY_PAGE_UP: u32 = 263;
+pub const KEY_PAGE_DOWN: u32 = 264;
 
 /// Establishes a connection to console_server's line-input protocol, same
 /// shape as `storage_connect`/`fs_connect`.
@@ -260,6 +284,23 @@ pub fn console_connect(console_slot: u32, buf_grant_slot: u32, reader_slot: u32)
 #[allow(dead_code)]
 pub fn console_read_line(console_slot: u32, reader_slot: u32) -> u32 {
     send(console_slot, CONSOLE_OP_READ_LINE, 0, 0, 0);
+    recv(reader_slot).w0
+}
+
+/// Switches the connection's input mode (`raw` = true selects raw
+/// single-keystroke mode). Must already be connected via
+/// `console_connect`.
+#[allow(dead_code)]
+pub fn console_set_mode(console_slot: u32, raw: bool) {
+    send(console_slot, CONSOLE_OP_SET_MODE, if raw { 1 } else { 0 }, 0, 0);
+}
+
+/// Requests and blocks for the next decoded key while in raw mode.
+/// Returns the tagged key value (plain ASCII `0..=255`, or one of the
+/// `KEY_*` constants for a non-ASCII key).
+#[allow(dead_code)]
+pub fn console_read_key(console_slot: u32, reader_slot: u32) -> u32 {
+    send(console_slot, CONSOLE_OP_READ_KEY, 0, 0, 0);
     recv(reader_slot).w0
 }
 

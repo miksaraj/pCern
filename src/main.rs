@@ -5,11 +5,16 @@
 
 // Each spawns a different binary at multiboot module index 4
 // (test_harness_spawn expects cap_test_a, keyboard_test_spawn expects
-// console_input_test) against its own dedicated grub config -- building
-// with both would have them race for the same module slot with no
-// identity check to catch the mismatch.
+// console_input_test, raw_input_test_spawn expects raw_input_test) against
+// its own dedicated grub config -- building with more than one would have
+// them race for the same module slot with no identity check to catch the
+// mismatch.
 #[cfg(all(feature = "test_harness", feature = "keyboard_test"))]
 compile_error!("test_harness and keyboard_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "test_harness", feature = "raw_input_test"))]
+compile_error!("test_harness and raw_input_test are mutually exclusive boot configurations; build one or the other, never both");
+#[cfg(all(feature = "keyboard_test", feature = "raw_input_test"))]
+compile_error!("keyboard_test and raw_input_test are mutually exclusive boot configurations; build one or the other, never both");
 
 extern crate alloc;
 
@@ -171,13 +176,13 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // Checkpoint N: the interactive shell -- purely an IPC client of
     // console_server/fs_fat32/name-service, no hardware ports or
     // capabilities of its own beyond the usual CSlot 1/2 convention.
-    // Excluded from the test_harness/keyboard_test builds: it would be
-    // one more concurrent console-input reader racing console_input_test
-    // for the "single reader at a time" role in the keyboard_test build,
-    // and would shift every fixture's task id (used throughout
+    // Excluded from the test_harness/keyboard_test/raw_input_test builds:
+    // it would be one more concurrent console-input reader racing
+    // console_input_test/raw_input_test for the "single reader at a time"
+    // role, and would shift every fixture's task id (used throughout
     // run_tests.sh/console_input_test's own script) in the test_harness
     // build for no benefit, since nothing there exercises it anyway.
-    #[cfg(not(any(feature = "test_harness", feature = "keyboard_test")))]
+    #[cfg(not(any(feature = "test_harness", feature = "keyboard_test", feature = "raw_input_test")))]
     {
         let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
         println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'shell' (id={})", shell_id);
@@ -190,6 +195,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "keyboard_test")]
     keyboard_test_spawn();
+
+    #[cfg(feature = "raw_input_test")]
+    raw_input_test_spawn();
 
     // Spawned last. Never blocks or exits, so block_current()/exit_current()
     // always have at least one task to fall back to instead of panicking
@@ -297,6 +305,30 @@ fn keyboard_test_spawn() {
     println!(
         "[ \x1b[1;32mok\x1b[0m ] keyboard_test: spawned console_input_test (id={})",
         console_input_test_id
+    );
+}
+
+/// Spawns `raw_input_test` (see `userland/cap_test`), Phase 7 Checkpoint
+/// R's regression fixture for console_server's new raw single-keystroke
+/// mode, only present in a kernel built with `--features raw_input_test`
+/// (see `make test-raw-input`) -- `grub-rawtest.cfg` is the one grub
+/// config whose module list matches the index below. Its own standalone
+/// build/boot for the same reason as `keyboard_test_spawn`: it blocks on
+/// real external keystrokes rather than completing on its own, and it
+/// would otherwise race console_input_test for the single reader_owner
+/// role if folded into that build. Granted the same direct COM1 port
+/// access as console_input_test, for the same readiness-marker reason.
+#[cfg(feature = "raw_input_test")]
+fn raw_input_test_spawn() {
+    const COM1_PORTS: [u16; 2] = [0x3F8, 0x3FD];
+    let raw_input_test_id =
+        loader::spawn_from_module(4, &COM1_PORTS).expect("no multiboot module 4 found for 'raw_input_test'");
+    let raw_input_test_endpoint = ipc::create_endpoint(raw_input_test_id);
+    grant_endpoint_cap(raw_input_test_id, raw_input_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] raw_input_test: spawned raw_input_test (id={})",
+        raw_input_test_id
     );
 }
 

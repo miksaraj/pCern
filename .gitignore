@@ -5,6 +5,7 @@
 iso
 iso-test
 iso-keytest
+iso-rawtest
 *.iso
 *.o
 *.elf

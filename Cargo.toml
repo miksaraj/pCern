@@ -22,6 +22,14 @@ test_harness = []
 # blocks on real external `sendkey` input rather than completing on its
 # own.
 keyboard_test = []
+# Spawns only raw_input_test (see userland/cap_test), Phase 7 Checkpoint
+# R's regression fixture for console_server's new raw single-keystroke
+# mode -- its own standalone boot configuration (grub-rawtest.cfg), same
+# reason as keyboard_test: it blocks on real external `sendkey` input, and
+# it would otherwise contend with console_input_test for the single
+# reader_owner role if folded into that build. See `make test-raw-input`
+# and src/main.rs's raw_input_test_spawn.
+raw_input_test = []
 
 [profile.dev]
 panic = "abort"

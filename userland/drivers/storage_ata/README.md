@@ -39,9 +39,9 @@ A client connects once, then issues any number of reads and writes:
 3. Any number of `STORAGE_OP_READ_BLOCK` (`w1` = LBA), each replied to on
    the endpoint from step 2 with `w0 = 1` (success, sector now sitting in
    the shared page) or `w0 = 0` (failure).
-4. Any number of `STORAGE_OP_WRITE_BLOCK` (`w1` = LBA, Phase 7 Checkpoint
-   P) -- writes the shared page's current bytes to that sector, replying
-   the same way. No cache-flush is issued after (see the CHANGELOG).
+4. Any number of `STORAGE_OP_WRITE_BLOCK` (`w1` = LBA) -- writes the
+   shared page's current bytes to that sector, replying the same way.
+   No cache-flush is issued after (see the CHANGELOG).
 
 Two messages are needed for setup rather than one because a single
 message can carry at most one capability transfer, and this handshake
@@ -55,6 +55,6 @@ global `reply_slot`/buffer-mapped pair, not per-client state, because this
 project has exactly one standing client (`fs_fat32`). Running a second
 client (e.g. `storage_client_test`) concurrently with `fs_fat32` would have
 them silently clobber each other's connection; see
-`src/main.rs`'s `test_harness_spawn` in the kernel for where this is
+`kernel/src/main.rs`'s `test_harness_spawn` for where this is
 called out, and `userland/cap_test/README.md` for how `storage_client_test`
 is still exercised on its own instead.

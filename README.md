@@ -10,7 +10,7 @@ OS -- see [Status](#status) below for exactly how far "OS" goes today.
 If you're looking for the kernel specifically -- what's in ring 0, its
 capability model, its syscall ABI -- see [kernel/README.md](kernel/README.md).
 If you're looking for the story of *why* this project is built the way it
-is, checkpoint by checkpoint, see [CLAUDE.md](CLAUDE.md).
+is, see [CLAUDE.md](CLAUDE.md).
 
 ## What runs in userspace (`userland/`)
 

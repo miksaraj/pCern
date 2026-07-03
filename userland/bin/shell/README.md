@@ -27,15 +27,15 @@ completing while the shell is still blocked waiting on an `fs_open`/
 - **`read <file>`** -- opens `<file>` via `fs_fat32` and prints its
   contents a sector at a time, the same read loop `cap_test`'s
   `fs_client_test` already exercises.
-- **`edit <file>`** -- a full-screen text editor (Phase 7, Checkpoint S).
-  Opens `<file>`, creating a fresh zero-length one if it doesn't already
-  exist, and loads any existing content into a 16-page (64 KiB) buffer.
-  Switches the console into raw single-keystroke mode (Checkpoint R) and
-  redraws the buffer on every change via the console's existing ANSI
-  cursor-addressing escapes. Supports arrow-key/Home/End/Delete/
-  Backspace navigation and editing, plain-ASCII insertion, Ctrl-S to save
-  (via `fs_fat32`'s write support, Checkpoint Q) and return to the
-  prompt, and Ctrl-Q to discard and return without saving. The editor's
+- **`edit <file>`** -- a full-screen text editor. Opens `<file>`,
+  creating a fresh zero-length one if it doesn't already exist, and
+  loads any existing content into a 16-page (64 KiB) buffer. Switches
+  the console into raw single-keystroke mode and redraws the buffer on
+  every change via the console's existing ANSI cursor-addressing
+  escapes. Supports arrow-key/Home/End/Delete/Backspace navigation and
+  editing, plain-ASCII insertion, Ctrl-S to save (via `fs_fat32`'s write
+  support) and return to the prompt, and Ctrl-Q to discard and return
+  without saving. The editor's
   actual logic lives in `libpcern::editor::Editor` -- see that crate's
   README for why, and `userland/cap_test/src/bin/editor_input_test.rs`
   for the regression fixture that exercises the exact same code.
@@ -56,7 +56,7 @@ bigger than one sector means copying each chunk out to the correct offset
 in a second, separate page before handing that page to
 `spawn_from_memory`. This shell does exactly that, up to one page (4096
 bytes, the same cap every `MemoryGrant` already has) rather than adding
-multi-page assembly for what's still a "run a few small programs" phase.
+multi-page assembly for what's still just running a few small programs.
 A program's frames and page directory are never reclaimed once it exits,
 same as every task spawned any other way today -- a known, deliberate gap
-at this phase's scope, not something specific to this shell.
+in this project's current scope, not something specific to this shell.

@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Write support (Phase 7, Checkpoint Q): overwrite, growth past a file's
-  current cluster span (free-cluster allocation + FAT chain extension),
+- Write support: overwrite, growth past a file's current cluster span
+  (free-cluster allocation + FAT chain extension),
   and brand-new file creation, all through one `FS_OP_WRITE` op
   (mirroring `FS_OP_READ`'s shape/partial-transfer contract) plus a
   "create if missing" flag folded into `FS_OP_OPEN_NAME2`'s
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-07-02
 
-Initial release (Checkpoint J).
+Initial release.
 
 ### Added
 

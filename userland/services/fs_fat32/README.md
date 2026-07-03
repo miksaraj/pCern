@@ -1,7 +1,7 @@
 # fs_fat32
 
-A FAT32 filesystem server (read and write, Phase 7 Checkpoint Q). Looks
-up `"storage"` and reads/writes sectors through `storage_ata`, then
+A FAT32 filesystem server (read and write). Looks up `"storage"` and
+reads/writes sectors through `storage_ata`, then
 registers as `"fs"` and serves the same kind of shared-memory-grant
 protocol to its own clients that `storage_ata` serves to it.
 
@@ -52,8 +52,8 @@ budget can carry, so it's split the same way setup is:
   incrementing `offset` by whatever came back, same partial-read contract
   as `storage_ata`'s.
 
-`FS_OP_OPEN_NAME2`'s `w2` (Phase 7, Checkpoint Q) is a "create if
-missing" flag: `0` opens an existing file only (the original behavior,
+`FS_OP_OPEN_NAME2`'s `w2` is a "create if missing" flag: `0` opens an
+existing file only (the original behavior,
 unchanged for every read-only caller), `1` opens an existing file or
 creates a fresh zero-length one. `FS_OP_WRITE` (`w1` = offset, `w2` =
 length) mirrors `FS_OP_READ`'s shape and partial-transfer contract

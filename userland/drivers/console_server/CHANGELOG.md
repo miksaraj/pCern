@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A raw single-keystroke input mode (Phase 7, Checkpoint R):
-  `CONSOLE_OP_SET_MODE` switches a connection between line mode
+- A raw single-keystroke input mode: `CONSOLE_OP_SET_MODE` switches a
+  connection between line mode
   (unchanged) and raw mode, and `CONSOLE_OP_READ_KEY` delivers the next
   decoded key immediately -- no echo, no line accumulation -- for a
   full-screen editor that redraws itself via the existing ANSI escapes.
@@ -65,10 +65,10 @@ Initial release.
 ### Added
 
 - Owns the keyboard and the VGA/ANSI text console, moved out of the
-  kernel (Checkpoint D).
+  kernel.
 - `OP_PUTCHAR` byte-at-a-time IPC protocol for client output.
 - ANSI/VT100 escape parsing: cursor movement, erase, and SGR (colors +
   bold).
-- Registers as `"console"` with the name service (Checkpoint H).
+- Registers as `"console"` with the name service.
 - VGA and keyboard access via capability (`MemoryGrant`/`IrqControl`)
-  instead of a hardcoded allowlist (Checkpoint G).
+  instead of a hardcoded allowlist.

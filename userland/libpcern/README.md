@@ -16,7 +16,7 @@ of its own.
   `register_irq`, `map_memory`, `mem_alloc`, `create_task`,
   `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
   `spawn_from_memory`) -- one function per syscall, matching the
-  numbers/argument registers in the kernel's `src/syscall.rs`.
+  numbers/argument registers in `kernel/src/syscall.rs`.
 - **Name-service helpers** (`lookup_name`, `lookup_name_retry`,
   `register_name`, `pack_name`) -- see `userland/services/nameservice/README.md`
   for the wire protocol these implement.

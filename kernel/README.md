@@ -12,7 +12,7 @@ pCern is the kernel underneath **ZephyrLite**, the OS built on top of it in
 this same repository -- see the [repo root README](../README.md) for the OS
 as a whole (what it's for, how the pieces fit together, release/versioning)
 and [../CLAUDE.md](../CLAUDE.md) for the story of *why* this kernel is built
-the way it is, checkpoint by checkpoint.
+the way it is.
 
 ## What's actually in ring 0
 

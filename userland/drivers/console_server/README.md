@@ -44,9 +44,9 @@ emulator.
 Keyboard input arrives via the interrupt the kernel forwards for IRQ 1
 (through the `IrqControl` capability above); scancodes are decoded here
 (`keyboard.rs`) the same way they used to be decoded in the kernel before
-Checkpoint D moved this whole responsibility out of ring 0.
+this whole responsibility moved out of ring 0.
 
-## Line-input protocol (Checkpoint L)
+## Line-input protocol
 
 Every keystroke is echoed to the screen unconditionally, the same as
 always. A client that also wants to *read* typed input connects once:
@@ -72,7 +72,7 @@ precedent as `storage_ata`'s single client, though worth calling out
 specifically here: `send` blocks the *sender* until a matching `recv`
 arrives, so a reader that arms a read and then never calls `recv` would
 block this task's entire main loop (no other client's `OP_PUTCHAR`, no
-further keystroke echo) until it does. Fine for this phase's one trusted
+further keystroke echo) until it does. Fine for today's one trusted
 shell client; would need revisiting (a queue or timeout) against an
 untrusted reader.
 
@@ -90,7 +90,7 @@ handling. Bytes typed once the accumulator reaches `CONSOLE_LINE_MAX`
 (256) are dropped, not buffered -- not an error, just not accumulated;
 they're still echoed to the screen.
 
-## Raw single-keystroke mode (Phase 7, Checkpoint R)
+## Raw single-keystroke mode
 
 Layered onto the exact same reader connection as line mode above, not a
 second one:
@@ -120,8 +120,8 @@ the tagged `u32` return value and the `KEY_*` constants (mirrored in
 
 ## Why this is a userspace task at all
 
-Before Checkpoint D, the kernel itself decoded scancodes and wrote
-directly to VGA memory, and a privileged `sys_debug_write` syscall let any
+Originally, the kernel itself decoded scancodes and wrote directly to
+VGA memory, and a privileged `sys_debug_write` syscall let any
 ring-3 task print by handing the kernel a pointer to write to serial --
 which also meant any ring-3 task could make the kernel read arbitrary
 memory. Moving the console fully into userspace and retiring

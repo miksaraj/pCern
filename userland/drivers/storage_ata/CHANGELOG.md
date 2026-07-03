@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ATA/IDE write support (Phase 7, Checkpoint P): `outw` in `port.rs`,
-  `write_sector` in `ata.rs` (`CMD_WRITE_SECTORS`, waiting for
+- ATA/IDE write support: `outw` in `port.rs`, `write_sector` in `ata.rs`
+  (`CMD_WRITE_SECTORS`, waiting for
   `STATUS_DRQ` before each data word rather than once up front, plus a
   `STATUS_DF` write-fault check), and a new `STORAGE_OP_WRITE_BLOCK`
   protocol op alongside the existing `READ_BLOCK`. No cache-flush
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-07-02
 
-Initial release (Checkpoint I).
+Initial release.
 
 ### Added
 

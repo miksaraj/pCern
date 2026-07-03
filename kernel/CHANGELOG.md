@@ -27,26 +27,25 @@ of write support all the way down the storage stack.
 
 ### Added
 
-- ATA/IDE write support in `storage_ata` (Checkpoint P): a new
-  `STORAGE_OP_WRITE_BLOCK` protocol op alongside the existing
-  `READ_BLOCK`, backed by a real `write_sector` (`CMD_WRITE_SECTORS`,
-  correct DRQ-wait-per-word sequencing, a `STATUS_DF` write-fault check).
-- Write support in `fs_fat32` (Checkpoint Q): overwrite, growth past a
-  file's current cluster span (free-cluster allocation + FAT chain
-  extension, mirrored to both FAT copies), and brand-new file creation,
-  through a new `FS_OP_WRITE` op and a "create if missing" flag on the
-  existing open op.
-- A raw single-keystroke input mode in `console_server` (Checkpoint R):
+- ATA/IDE write support in `storage_ata`: a new `STORAGE_OP_WRITE_BLOCK`
+  protocol op alongside the existing `READ_BLOCK`, backed by a real
+  `write_sector` (`CMD_WRITE_SECTORS`, correct DRQ-wait-per-word
+  sequencing, a `STATUS_DF` write-fault check).
+- Write support in `fs_fat32`: overwrite, growth past a file's current
+  cluster span (free-cluster allocation + FAT chain extension, mirrored
+  to both FAT copies), and brand-new file creation, through a new
+  `FS_OP_WRITE` op and a "create if missing" flag on the existing open
+  op.
+- A raw single-keystroke input mode in `console_server`:
   `CONSOLE_OP_SET_MODE`/`CONSOLE_OP_READ_KEY`, layered onto the existing
   line-input reader connection rather than a second one. `keyboard.rs`
   gained Ctrl-state tracking and `0xE0`-prefixed extended-key decoding
   (arrows, Home/End/Delete/PageUp/PageDown) to support it.
-- `shell`'s `edit <file>` command (Checkpoint S): a full-screen text
-  editor (arrow/Home/End/Delete/Backspace/insert, Ctrl-S to save, Ctrl-Q
-  to discard) built on the three additions above. The editor's core logic
-  lives in a new `libpcern::editor` module, shared with a `cap_test`
-  regression fixture so the exact code that ships is the exact code that
-  fixture exercises.
+- `shell`'s `edit <file>` command: a full-screen text editor (arrow/Home/
+  End/Delete/Backspace/insert, Ctrl-S to save, Ctrl-Q to discard) built on
+  the three additions above. The editor's core logic lives in a new
+  `libpcern::editor` module, shared with a `cap_test` regression fixture
+  so the exact code that ships is the exact code that fixture exercises.
 
 ### Fixed
 
@@ -123,7 +122,7 @@ The first interactive OS experience: type a command, something happens.
 ### Removed
 
 - The two endless-print kernel smoke-test tasks (`task_a`/`task_b`,
-  present since the earliest checkpoints) from every boot configuration,
+  present since early on) from every boot configuration,
   including production -- their unthrottled console/serial spam has no
   place in a build meant to actually be typed into. Removing them also
   simplified every task-id-dependent build (`nameservice`'s registration
@@ -197,10 +196,10 @@ userspace ecosystem of drivers/services built on top of it.
 - The TSS's `esp0` field started at `0`, a landmine for the first ring-3
   to ring-0 transition.
 - `ping.asm`/`pong.asm` (an early IPC demo) silently completed only one
-  round-trip instead of five, since Phase 3, due to a clobbered register
-  across a `call` -- caught while adding stricter round-by-round
-  verification, moot once those demo programs were removed as redundant
-  with `cap_test`'s fixtures.
+  round-trip instead of five, due to a clobbered register across a
+  `call` -- caught while adding stricter round-by-round verification,
+  moot once those demo programs were removed as redundant with
+  `cap_test`'s fixtures.
 
 ### Removed
 
@@ -208,7 +207,7 @@ userspace ecosystem of drivers/services built on top of it.
   `userland/cap_test`'s fixtures covered the same ground more thoroughly.
 - A handful of standalone `.asm` verification fixtures at the userland
   root (`driver_test.asm`, `irq_test.asm`, `nondriver_test.asm`,
-  `ring3_test.asm`, `ring3_cli_test.asm`) left over from early checkpoints;
+  `ring3_test.asm`, `ring3_cli_test.asm`) left over from early development;
   all of them exercised syscalls or mechanisms (`sys_debug_write`,
   `is_driver`) retired long before this release.
 

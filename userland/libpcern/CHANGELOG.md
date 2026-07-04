@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storage's/fs's own connect-then-request shape (see
   userland/drivers/net_rtl8139).
 
+## [0.4.0] - 2026-07-04
+
 ### Added
 
 - `reboot`/`SYS_REBOOT`: resets the machine via a `RebootControl`

@@ -22,8 +22,8 @@ historical context.
 
 ## [0.6.0] - 2026-07-04
 
-Checkpoint W: a PCI-enumerated NIC driver, and everything the kernel
-needed to grow to support one.
+A PCI-enumerated NIC driver, and everything the kernel needed to grow to
+support one.
 
 ### Added
 
@@ -40,7 +40,7 @@ needed to grow to support one.
   registered unconditionally; an unregistered line firing costs one
   harmless no-op dispatch.
 - `pic::mask`/`pic::unmask`, and a fix for a real interrupt storm this
-  surfaced during Checkpoint W's own bring-up: a PCI interrupt is
+  surfaced during its own bring-up: a PCI interrupt is
   level-triggered, not edge-triggered like the keyboard's, so sending EOI
   alone (this kernel's only pattern until now) let the still-asserted
   line re-trigger the instant `iret` re-enabled interrupts -- faster than
@@ -73,6 +73,8 @@ needed to grow to support one.
   pairwise `compile_error!` blocks (which grew quadratically with every
   new feature) to one linear count-and-assert, ahead of adding the sixth
   (`nic_test`).
+
+## [0.5.0] - 2026-07-04
 
 ### Added
 

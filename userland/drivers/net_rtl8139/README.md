@@ -46,9 +46,9 @@ syscall) just to pass one integer at spawn time.
   frame is ever held for a client to claim, not a queue: if a second
   frame arrives before `NIC_OP_RECV` claims the first, the first is
   silently dropped. See `main.rs`'s own doc comment for why that's
-  enough for this checkpoint's one-fixture test, and console_server's
-  raw-mode key queue (Checkpoint R) for what a real queue would look
-  like if a future client needs one.
+  enough for the current test fixture, and console_server's raw-mode
+  key queue for what a real queue would look like if a future client
+  needs one.
 - The receive ring is 8K+16 (the smallest of the four sizes the hardware
   supports) plus a 1500-byte overflow margin (`RCR`'s `WRAP` bit): the
   card is allowed to spill a packet's tail past the nominal boundary

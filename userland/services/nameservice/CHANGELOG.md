@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `(5, "net")` added to the registration allowlist for Checkpoint W's
+- `(5, "net")` added to the registration allowlist for the new
   `net_rtl8139` NIC driver, which lands at task id 5 (right after
   fs_fat32) in both the production boot and the standalone `nic_test`
   harness.

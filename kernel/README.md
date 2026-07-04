@@ -90,6 +90,7 @@ grub-rawtest.cfg            raw-input test boot config (make test-raw-input only
 grub-editortest.cfg         editor test boot config (make test-editor only)
 grub-reboottest.cfg         reboot-syscall test boot config (make test-reboot only)
 grub-nictest.cfg            NIC-driver test boot config (make test-nic only)
+grub-arptest.cfg            ARP/ICMP responder test boot config (make test-arp only)
 CHANGELOG.md                this crate's release history (Keep a Changelog + SemVer)
 ```
 

@@ -8,17 +8,29 @@
 //! Scope is deliberately narrow, matching every other driver in this
 //! project: raw Ethernet frames in and out, nothing above that layer --
 //! no ARP, no IP, that's later checkpoints' job. One frame in flight at a
-//! time in each direction: a single transmit descriptor (of the four the
-//! hardware has), and no attempt to pipeline a second send before the
-//! first completes.
+//! time (no attempt to pipeline a second send before the first
+//! completes), but rotating across all four transmit descriptors the
+//! hardware has -- not reusing descriptor 0 for every send. That
+//! wasn't just a style choice: reusing one descriptor back-to-back was
+//! this driver's original design, and it silently never completes a
+//! second transmission (confirmed against both `-netdev user` and
+//! `-netdev socket`, so this isn't a `-netdev` quirk) -- both real
+//! RTL8139 hardware and QEMU's emulation of it track an internal
+//! "next expected descriptor" pointer that advances after each
+//! completion, and rewriting the one it just finished instead of the
+//! next one in sequence is simply never picked up.
 
 use libpcern::{inb, inl, inw, outb, outl, outw};
 
 // Register offsets, relative to the discovered I/O-BAR base (see
 // main.rs).
 const REG_MAC0: u16 = 0x00; // 6 bytes, IDR0-5 -- burned-in station address
-const REG_TSD0: u16 = 0x10; // Transmit Status of Descriptor 0 (the only one this driver uses)
-const REG_TSAD0: u16 = 0x20; // Transmit Start Address of Descriptor 0 (physical)
+/// Transmit Status of Descriptor N (N=0..=3) and Transmit Start Address
+/// of Descriptor N -- the hardware requires successive transmissions to
+/// rotate through all four in order (see this module's own doc comment
+/// for why), even though only one is ever in flight at a time.
+const REG_TSD: [u16; 4] = [0x10, 0x14, 0x18, 0x1C];
+const REG_TSAD: [u16; 4] = [0x20, 0x24, 0x28, 0x2C];
 const REG_RBSTART: u16 = 0x30; // Receive Buffer Start (physical)
 const REG_CR: u16 = 0x37; // Command Register
 const REG_CAPR: u16 = 0x38; // Current Address of Packet Read
@@ -133,31 +145,37 @@ pub fn ack_interrupt(io_base: u16) -> u16 {
 /// Transmits `frame` (must be non-empty and at most `MAX_FRAME_SIZE`
 /// bytes): copies it into the driver's own transmit buffer (already
 /// mapped at `tx_buf_virt`, physical address `tx_buf_phys`), kicks off
-/// transmission via the one descriptor this driver uses, then blocks --
+/// transmission via `*tx_desc` (0..=3, the next descriptor in this
+/// module's own required rotation -- see its doc comment), then blocks --
 /// a plain busy-wait, the same polling-not-interrupt-driven approach
 /// storage_ata's own PIO loop already uses for an analogous wait; this
 /// scheduler preempts on the timer tick regardless, so a polling loop
 /// here can't starve anything else -- until the card reports it's done
-/// with the descriptor, or `MAX_HARDWARE_POLLS` is reached. Returns
-/// `false` if `frame` doesn't fit or the card never finished.
-pub fn send(io_base: u16, tx_buf_virt: usize, tx_buf_phys: u32, frame: &[u8]) -> bool {
+/// with the descriptor, or `MAX_HARDWARE_POLLS` is reached. `*tx_desc` is
+/// advanced to the next descriptor in rotation before returning,
+/// regardless of success, since the one just used is no longer safe to
+/// reuse immediately either way. Returns `false` if `frame` doesn't fit
+/// or the card never finished.
+pub fn send(io_base: u16, tx_buf_virt: usize, tx_buf_phys: u32, frame: &[u8], tx_desc: &mut u8) -> bool {
     if frame.is_empty() || frame.len() > MAX_FRAME_SIZE {
         return false;
     }
+    let idx = (*tx_desc % 4) as usize;
+    *tx_desc = (*tx_desc + 1) % 4;
     unsafe {
         let dst = core::slice::from_raw_parts_mut(tx_buf_virt as *mut u8, frame.len());
         dst.copy_from_slice(frame);
 
-        outl(io_base + REG_TSAD0, tx_buf_phys);
+        outl(io_base + REG_TSAD[idx], tx_buf_phys);
         // Writing just the length here (bit 13, OWN, stays 0) is what
         // actually kicks off the card's DMA read + transmit; it sets bit
         // 13 back to 1 once it's done with the descriptor, successfully
         // or not -- this driver's narrow scope only checks "done", not
         // "succeeded" (no TOK/TABT inspection), matching the same
         // best-effort level of care as the rest of this checkpoint.
-        outl(io_base + REG_TSD0, frame.len() as u32);
+        outl(io_base + REG_TSD[idx], frame.len() as u32);
         let mut polls = 0u32;
-        while inl(io_base + REG_TSD0) & TSD_OWN == 0 {
+        while inl(io_base + REG_TSD[idx]) & TSD_OWN == 0 {
             polls += 1;
             if polls >= MAX_HARDWARE_POLLS {
                 return false;

@@ -12,15 +12,16 @@
 // `compile_error!` per combination (which grew quadratically every time a
 // new `*_test` feature was added -- ten pairs for five features before
 // Checkpoint W's `nic_test` made it six), catches any two-or-more
-// combination in one check, and adding a seventh feature later only means
-// adding one more term here, not six more blocks.
+// combination in one check, and adding another feature later only means
+// adding one more term here, not N more blocks.
 const _: () = {
     let count = cfg!(feature = "test_harness") as u8
         + cfg!(feature = "keyboard_test") as u8
         + cfg!(feature = "raw_input_test") as u8
         + cfg!(feature = "editor_test") as u8
         + cfg!(feature = "reboot_test") as u8
-        + cfg!(feature = "nic_test") as u8;
+        + cfg!(feature = "nic_test") as u8
+        + cfg!(feature = "arp_icmp_test") as u8;
     assert!(
         count <= 1,
         "at most one *_test/test_harness feature may be enabled at a time; build one or the other, never several"
@@ -203,24 +204,27 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // Checkpoint N: the interactive shell -- purely an IPC client of
     // console_server/fs_fat32/name-service, no hardware ports or
     // capabilities of its own beyond the usual CSlot 1/2 convention.
-    // Excluded from the test_harness/keyboard_test/raw_input_test/
-    // editor_test/reboot_test/nic_test builds: it would be one more
-    // concurrent console-input reader racing that build's own fixture for
-    // the "single reader at a time" role, and would shift every fixture's
-    // task id (used throughout run_tests.sh/console_input_test's own
-    // script) in the test_harness build for no benefit, since nothing
-    // there exercises it anyway. Module index 4, spawned *before*
-    // spawn_net_rtl8139 below (module index 5) so shell's own id is
-    // always deterministic (5) regardless of whether a NIC is attached --
-    // see spawn_net_rtl8139's own doc comment for why the optional one
-    // must always come last.
+    // Excluded from every standalone test-harness build: it would be one
+    // more concurrent console-input reader racing that build's own
+    // fixture for the "single reader at a time" role in the
+    // console-input-driven ones, and would shift every fixture's task id
+    // (used throughout run_tests.sh/console_input_test's own script) in
+    // the test_harness build for no benefit, since nothing there
+    // exercises it anyway; the standalone `nic_test`/`arp_icmp_test`
+    // harnesses exclude it because their own module lists have no slot
+    // for it at all. Module index 4, spawned *before* spawn_net_rtl8139
+    // below (module index 5) so shell's own id is always deterministic
+    // (5) regardless of whether a NIC is attached -- see
+    // spawn_net_rtl8139's own doc comment for why the optional one must
+    // always come last.
     #[cfg(not(any(
         feature = "test_harness",
         feature = "keyboard_test",
         feature = "raw_input_test",
         feature = "editor_test",
         feature = "reboot_test",
-        feature = "nic_test"
+        feature = "nic_test",
+        feature = "arp_icmp_test"
     )))]
     {
         let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
@@ -232,25 +236,40 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     // Checkpoint W: the RTL8139 NIC driver, if PCI enumeration actually
     // finds one attached (QEMU only emulates one when told to via
-    // `-device rtl8139`) -- module index 5, spawned *last* and only in
-    // the production path (the standalone `nic_test` harness spawns it
-    // separately, at the same relative position, via its own dedicated
-    // module list). Deliberately last: `spawn_net_rtl8139` returns early
-    // without consuming a task id when no card is found, so if anything
-    // were spawned after it, that task would silently slide into the id
+    // `-device rtl8139`) -- module index 5, spawned *last* among the
+    // deterministic tasks and only in the production path (the
+    // standalone `nic_test`/`arp_icmp_test` harnesses spawn it
+    // separately via their own dedicated module lists). Deliberately
+    // last: `spawn_net_rtl8139` returns early without consuming a task
+    // id when no card is found, so if anything unconditional were
+    // spawned after it, that task would silently slide into the id
     // nameservice's ALLOWLIST hardcodes to "net" -- letting it register
-    // that trusted name in the real driver's place. Spawning it last
-    // means its absence just leaves that id never allocated to anyone.
+    // that trusted name in the real driver's place.
+    //
+    // Checkpoint X's ARP/IPv4/ICMP responder (module index 6) is only
+    // worth spawning when there's actually a NIC underneath it to talk
+    // through, so it's nested inside the `Some` arm here rather than a
+    // second, separately-gated spawn below: whenever net_rtl8139 is
+    // absent, netstack is never spawned either, so no task id past 6 is
+    // ever consumed in that case -- the same non-allocation guarantee
+    // spawn_net_rtl8139's own doc comment describes, just one link
+    // further down the chain.
     #[cfg(not(any(
         feature = "test_harness",
         feature = "keyboard_test",
         feature = "raw_input_test",
         feature = "editor_test",
         feature = "reboot_test",
-        feature = "nic_test"
+        feature = "nic_test",
+        feature = "arp_icmp_test"
     )))]
-    if spawn_net_rtl8139(5).is_none() {
-        println!("[ \x1b[1;33mwarn\x1b[0m ] no RTL8139 NIC found via PCI enumeration -- networking unavailable this boot");
+    match spawn_net_rtl8139(5) {
+        Some(_) => {
+            spawn_netstack(6);
+        }
+        None => {
+            println!("[ \x1b[1;33mwarn\x1b[0m ] no RTL8139 NIC found via PCI enumeration -- networking unavailable this boot");
+        }
     }
 
     #[cfg(feature = "test_harness")]
@@ -267,6 +286,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "nic_test")]
     nic_test_spawn();
+
+    #[cfg(feature = "arp_icmp_test")]
+    arp_icmp_test_spawn();
 
     #[cfg(feature = "reboot_test")]
     reboot_test_spawn();
@@ -567,6 +589,43 @@ fn nic_test_spawn() {
         "[ \x1b[1;32mok\x1b[0m ] nic_test: spawned nic_test (id={})",
         nic_test_id
     );
+}
+
+/// Spawns `netstack` (see `userland/services/netstack`) -- no hand-wired
+/// capabilities beyond the usual CSlot 1/2 convention, the same as
+/// shell: it reaches `net_rtl8139` by looking up "net" through the name
+/// service, the same way any other client would, so there's nothing for
+/// main.rs to grant it beyond an inbox.
+fn spawn_netstack(module_index: usize) -> task::TaskId {
+    let netstack_id = loader::spawn_from_module(module_index, &[]).expect("no multiboot module found for 'netstack'");
+    println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'netstack' (id={})", netstack_id);
+    let netstack_endpoint = ipc::create_endpoint(netstack_id);
+    grant_endpoint_cap(netstack_id, netstack_endpoint); // its CSlot 2: its own inbox
+    netstack_id
+}
+
+/// Spawns the standalone ARP/IPv4/ICMP responder test harness (see
+/// `run_arp_icmp_test.sh`), only present in a kernel built with
+/// `--features arp_icmp_test` (see `make test-arp`) -- `grub-arptest.cfg`
+/// is the one grub config whose module list matches the indices below.
+/// Like `nic_test_spawn`, needs the full nameservice/console_server/
+/// storage_ata/fs_fat32 stack the shared code above always spawns
+/// (module indices 0-3). `netstack` is spawned *first* here (module 4,
+/// task id 5) and `net_rtl8139` second (module 5, task id 6, satisfying
+/// the same `assert_eq!` production spawning relies on) purely to keep
+/// that assert's hardcoded expectation valid across every caller --
+/// spawn order in main.rs has no bearing on which task's own code the
+/// scheduler actually runs first once it starts, so netstack still finds
+/// "net" registered by the time its own `lookup_name_retry` call runs.
+/// Unlike `nic_test`, there's no separate in-guest fixture here at all:
+/// verification is entirely external (a real peer on the wire sends
+/// ARP/ICMP requests and checks netstack's real replies -- see
+/// run_arp_icmp_test.sh), since netstack itself never exits the way a
+/// test fixture would.
+#[cfg(feature = "arp_icmp_test")]
+fn arp_icmp_test_spawn() {
+    spawn_netstack(4);
+    spawn_net_rtl8139(5).expect("arp_icmp_test requires -device rtl8139 in this boot's QEMU invocation");
 }
 
 extern "C" fn idle_task() -> ! {

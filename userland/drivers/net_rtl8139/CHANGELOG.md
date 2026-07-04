@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-04
+
+### Fixed
+
+- `send()` always reused transmit descriptor 0, kicking off every
+  transmission by rewriting `TSAD0`/`TSD0` again -- which silently never
+  completes a *second* transmission: both real RTL8139 hardware and
+  QEMU's emulation of it track an internal "next expected descriptor"
+  pointer that advances after each completion, and rewriting the one
+  that was just used instead of the next one in sequence is never
+  picked up. Never caught before now because nothing in this project
+  had ever called `send()` more than once in a single boot until
+  `netstack` did. Now rotates through all four descriptors the hardware
+  actually has, in order, one frame in flight at a time as before.
+
 ## [0.1.0] - 2026-07-04
 
 Initial release.

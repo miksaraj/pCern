@@ -58,3 +58,58 @@ pub fn send_eoi(irq: u8) {
 pub fn read_mask() -> (u8, u8) {
     unsafe { (inb(PIC1_DATA), inb(PIC2_DATA)) }
 }
+
+/// Unmasks a single IRQ line (0-15) without touching any other line's
+/// mask bit -- for hardware discovered after boot (Checkpoint W's
+/// PCI-attached NIC), unlike `init`'s own fixed timer/keyboard unmask.
+/// Transparently also unmasks IRQ2 (the master's cascade line to the
+/// slave PIC) whenever `irq` is 8-15: `init` leaves it masked since
+/// nothing needed the slave PIC before, but nothing routed through it
+/// ever reaches the CPU while that line stays masked.
+///
+/// Never called for IRQ2 itself once any 8-15 line is in active use (see
+/// `ipc::recv`'s per-endpoint unmask) -- re-masking IRQ2 on `mask` below
+/// while a *different* slave line still needs it would cut off every
+/// slave IRQ, not just the one being serviced, so `mask` deliberately
+/// leaves IRQ2 alone; only this function ever touches it.
+pub fn unmask(irq: u8) {
+    unsafe {
+        if irq >= 8 {
+            let mask = inb(PIC2_DATA);
+            outb(PIC2_DATA, mask & !(1 << (irq - 8)));
+            let master_mask = inb(PIC1_DATA);
+            outb(PIC1_DATA, master_mask & !(1 << 2));
+        } else {
+            let mask = inb(PIC1_DATA);
+            outb(PIC1_DATA, mask & !(1 << irq));
+        }
+    }
+}
+
+/// Masks a single IRQ line (0-15) without touching any other line's mask
+/// bit, including IRQ2 (see `unmask`'s own doc comment for why that one's
+/// asymmetric). Checkpoint W: a PCI interrupt is level-triggered, not
+/// edge-triggered like the keyboard's -- the line stays asserted for as
+/// long as the *device's own* interrupt-pending condition does, which
+/// nothing at the kernel level clears (only the userland driver's own
+/// register writes do, once it actually services the condition). Sending
+/// EOI alone, the way the timer/keyboard ISRs always have, would tell the
+/// PIC "ready for another" while the still-asserted line immediately
+/// re-triggers it -- an infinite storm the instant interrupts are
+/// re-enabled on `iret`, faster than any userland task could ever be
+/// scheduled to clear it. Masking the line before EOI (see
+/// `irq::dispatch`) breaks that: the PIC won't reconsider a masked line
+/// regardless of whether the device is still asserting it, until
+/// `ipc::recv` unmasks it again on the driver's own schedule -- once it's
+/// actually ready for another.
+pub fn mask(irq: u8) {
+    unsafe {
+        if irq >= 8 {
+            let mask = inb(PIC2_DATA);
+            outb(PIC2_DATA, mask | (1 << (irq - 8)));
+        } else {
+            let mask = inb(PIC1_DATA);
+            outb(PIC1_DATA, mask | (1 << irq));
+        }
+    }
+}

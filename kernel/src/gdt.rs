@@ -38,13 +38,19 @@ struct GdtPointer {
     base: u32,
 }
 
-/// Ports 0..IO_BITMAP_PORTS get real per-port entries in the TSS I/O
-/// bitmap; ports at or past this fall outside the bitmap's backed region,
-/// which the CPU treats as "1" (blocked) automatically -- the standard
-/// technique for keeping the bitmap far smaller than the architectural
-/// max of 8192 bytes (all 65536 ports) when only a handful of low legacy
-/// ports (keyboard, VGA CRTC) ever need to be reachable from ring 3.
-const IO_BITMAP_PORTS: usize = 1024;
+/// Every port gets a real entry in the TSS I/O bitmap -- the full
+/// architectural max of 8192 bytes (all 65536 ports). Checkpoint D
+/// through Checkpoint I only ever needed a handful of low legacy ports
+/// (keyboard, VGA CRTC, the ATA/IDE bus), so a much smaller backed
+/// region covering just those, with the CPU's automatic "missing byte
+/// reads as all-1s/blocked" behavior handling everything past it, used
+/// to be enough. Checkpoint W's PCI-attached NIC breaks that: its I/O
+/// BAR is assigned by firmware at boot to whatever address the platform
+/// picks, discovered at runtime (see pci.rs) rather than known ahead of
+/// time -- nothing here can assume it lands inside any particular
+/// smaller window. The full bitmap costs a fixed ~8 KiB of `.bss`,
+/// trivial next to this kernel's other static allocations.
+const IO_BITMAP_PORTS: usize = 65536;
 const IO_BITMAP_BYTES: usize = IO_BITMAP_PORTS / 8 + 1; // +1 trailing all-1s byte
 
 /// A 32-bit TSS. This kernel never uses hardware task-switching -- the
@@ -199,15 +205,44 @@ pub fn set_kernel_stack(esp0: u32) {
     unsafe { TSS.esp0 = esp0 };
 }
 
+/// How many leading bytes of `TSS.io_bitmap` could currently contain a
+/// cleared (allowed) bit, tracked across calls to `set_io_permissions` --
+/// see that function's own doc comment for why.
+static mut DIRTY_BITMAP_BYTES: usize = 0;
+
 /// Rebuilds the I/O permission bitmap to allow exactly `ports` (each must
 /// be < IO_BITMAP_PORTS to take effect) and deny everything else. Called
 /// by the scheduler on every task switch with the incoming task's
 /// `allowed_ports` -- empty for ordinary tasks, which correctly just
 /// resets to "everything denied".
+///
+/// Only resets the *union* of "bytes this call's own ports could set a
+/// bit in" and "bytes the previous call could have left a bit cleared
+/// in" (`DIRTY_BITMAP_BYTES`), not the full `IO_BITMAP_BYTES` every time:
+/// with the bitmap now covering the full 65536-port range (see
+/// IO_BITMAP_PORTS's own doc comment) but only one task (the NIC driver)
+/// ever actually using a high port, resetting all ~8 KiB on every single
+/// task switch -- the common case being ordinary tasks with few or no
+/// allowed ports -- would burn far more of this hot path than the actual
+/// port grants ever need. Correctness argument: after this call returns,
+/// the only bytes that can contain a cleared bit are those covered by
+/// `ports`, since every byte in `[0, reset_bytes)` was just reset to all-1
+/// before any of `ports`' bits were cleared, and everything beyond
+/// `reset_bytes` was already all-1 by the same argument applied to the
+/// previous call (inductively, starting from `Tss::initial`'s all-1
+/// array) -- so tracking just this call's own dirtied range as the next
+/// call's `DIRTY_BITMAP_BYTES` is enough to preserve that invariant.
 pub fn set_io_permissions(ports: &[u16]) {
     unsafe {
         let bitmap = core::ptr::addr_of_mut!(TSS.io_bitmap) as *mut u8;
-        for i in 0..IO_BITMAP_BYTES {
+        let needed_bytes = ports
+            .iter()
+            .filter(|&&port| (port as usize) < IO_BITMAP_PORTS)
+            .map(|&port| port as usize / 8 + 1)
+            .max()
+            .unwrap_or(0);
+        let reset_bytes = DIRTY_BITMAP_BYTES.max(needed_bytes).min(IO_BITMAP_BYTES);
+        for i in 0..reset_bytes {
             bitmap.add(i).write(0xFF);
         }
         for &port in ports {
@@ -217,5 +252,6 @@ pub fn set_io_permissions(ports: &[u16]) {
                 byte.write(byte.read() & !(1 << (port % 8)));
             }
         }
+        DIRTY_BITMAP_BYTES = needed_bytes;
     }
 }

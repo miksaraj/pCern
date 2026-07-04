@@ -169,17 +169,7 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             }
             regs.eax = 0;
         }
-        SYS_MEM_ALLOC => {
-            // `ebx`=virt_addr to map a freshly allocated page at in the
-            // caller's own address space. Returns a capability slot for a
-            // MemoryGrant describing that same page, which can then be
-            // handed to another task (via send's transfer slot) so it can
-            // map the *same* physical page into its own space too -- the
-            // bulk data transfer primitive later checkpoints build on.
-            // Capped at exactly one page: mm::frame only hands out single
-            // frames today, no contiguous-multi-frame allocation exists.
-            regs.eax = sys_mem_alloc(regs.ebx as usize);
-        }
+        SYS_MEM_ALLOC => sys_mem_alloc(regs),
         SYS_SPAWN_FROM_MEMORY => regs.eax = sys_spawn_from_memory(regs),
         SYS_REBOOT => match resolve_current_cap(regs.ebx) {
             // `ebx`=capability slot holding a RebootControl -- holding a
@@ -274,28 +264,74 @@ fn sys_map_memory(phys_addr: usize, virt_addr: usize, len: usize, writable: bool
     0
 }
 
-/// Allocates one fresh physical frame, maps it into the caller's own
-/// address space at `virt_addr`, and mints a capability describing it.
-/// Returns `0` (an empty/invalid slot, indistinguishable from failure --
-/// there's nothing sensitive about "you're out of memory" worth a
-/// separate error channel here) if `virt_addr` isn't page-aligned or
-/// allocation fails.
-fn sys_mem_alloc(virt_addr: usize) -> u32 {
+/// Allocates `ecx` fresh physical frames (`0` treated as `1`, matching
+/// every caller before Checkpoint W, which always left `ecx` at 0), maps
+/// them contiguously into the caller's own address space starting at
+/// `ebx`=virt_addr, and mints a capability describing the whole range.
+/// Sets `regs.eax` to the new capability's slot (`0` on failure) and
+/// `regs.ecx` to the range's *physical* base address -- needed by a
+/// DMA-capable device driver (Checkpoint W's RTL8139) to tell its
+/// hardware where to read/write, since the device's own DMA engine
+/// operates on physical memory directly with no notion of this task's
+/// page tables. Exposing it isn't a new privilege boundary: a caller
+/// that already holds this exact MemoryGrant can already read and write
+/// every byte of the memory that address names, so learning the address
+/// itself reveals nothing it couldn't already control.
+///
+/// More than one frame only ever comes from `mm::frame::alloc_frames_contiguous`
+/// (never scattered single frames): the whole reason a caller asks for
+/// more than one is to hand hardware a single physically contiguous
+/// buffer, which a scattered mapping would only look contiguous to this
+/// task's own virtual address space, not to a DMA engine bypassing it
+/// entirely.
+fn sys_mem_alloc(regs: &mut SavedRegs) {
+    let virt_addr = regs.ebx as usize;
+    let page_count = if regs.ecx == 0 { 1 } else { regs.ecx as usize };
+
     // Same reasoning as sys_map_memory: virt_addr is entirely caller-chosen
-    // and must not reach the kernel's own higher half.
-    if virt_addr % mm::frame::FRAME_SIZE != 0 || virt_addr >= mm::paging::KERNEL_VMA {
-        return 0;
-    }
-    let Some(phys) = mm::frame::alloc_frame() else {
-        return 0;
+    // and the mapped range must not reach the kernel's own higher half.
+    // `checked_mul`/`checked_add` matter here in a way they didn't for the
+    // old single-page-only version: a large enough (attacker-controlled)
+    // `page_count` could otherwise overflow `len`'s computation on this
+    // 32-bit target and wrap back under the KERNEL_VMA bound check below,
+    // exactly the class of bypass this kernel has already had to fix once
+    // (see the root CHANGELOG's Security section) for a different syscall.
+    let Some(len) = page_count.checked_mul(mm::frame::FRAME_SIZE) else {
+        regs.eax = 0;
+        regs.ecx = 0;
+        return;
     };
+    let virt_end_ok = virt_addr
+        .checked_add(len)
+        .is_some_and(|end| end <= mm::paging::KERNEL_VMA);
+    if virt_addr % mm::frame::FRAME_SIZE != 0 || !virt_end_ok {
+        regs.eax = 0;
+        regs.ecx = 0;
+        return;
+    }
+
+    let allocated = if page_count == 1 {
+        mm::frame::alloc_frame()
+    } else {
+        mm::frame::alloc_frames_contiguous(page_count)
+    };
+    let Some(phys) = allocated else {
+        regs.eax = 0;
+        regs.ecx = 0;
+        return;
+    };
+
     let mut page_dir = mm::paging::PageDirectory::from_phys(scheduler::current_page_dir_phys());
-    page_dir.map_page(virt_addr, phys, true, true);
+    for i in 0..page_count {
+        let offset = i * mm::frame::FRAME_SIZE;
+        page_dir.map_page(virt_addr + offset, phys + offset, true, true);
+    }
     let node = cap::mint_root(CapKind::MemoryGrant {
         phys_base: phys,
-        len: mm::frame::FRAME_SIZE,
+        len,
         writable: true,
     });
-    scheduler::current_cspace_install(node)
+    regs.eax = scheduler::current_cspace_install(node);
+    regs.ecx = phys as u32;
 }
 

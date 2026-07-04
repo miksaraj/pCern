@@ -245,6 +245,114 @@ pub fn fs_truncate(fs_slot: u32, my_inbox_slot: u32, new_size: u32) -> bool {
     recv(my_inbox_slot).w0 == 1
 }
 
+/// NIC wire protocol (see userland/drivers/net_rtl8139). Setup mirrors
+/// storage's/fs's (`nic_connect`, same SET_BUFFER/SET_REPLY two-message
+/// pattern): a client hands over a shared page via `SYS_MEM_ALLOC`/
+/// transfer for the driver to place a received frame into (or read a
+/// frame to send from), and its own inbox as the reply-to address. Only
+/// one client and, on the receive side, only the single most recently
+/// received frame is held at a time -- see net_rtl8139's own doc comment
+/// for why a real queue isn't needed for this checkpoint's scope (raw
+/// Ethernet frames in and out, nothing above that layer).
+pub const NIC_OP_SET_BUFFER: u32 = 1;
+pub const NIC_OP_SET_REPLY: u32 = 2;
+/// Reply `w0`/`w1` pack the driver's 6-byte MAC address the same way
+/// `pack_name` packs an 8-byte name: `w0` the first 4 bytes, `w1` the
+/// last 2 (zero-padded to a full word), both little-endian.
+pub const NIC_OP_GET_MAC: u32 = 3;
+/// Transmits `w1` bytes from the shared buffer as one raw Ethernet frame.
+/// Reply `w0` = 1 sent / 0 failed (no buffer mapped, or `w1` exceeds
+/// `NIC_MAX_FRAME`).
+pub const NIC_OP_SEND: u32 = 4;
+/// Requests the next received frame, blocking until one arrives (or
+/// replying immediately if one was already waiting -- see
+/// net_rtl8139's own "most recently received frame" slot). Reply `w0` =
+/// the frame's length placed in the shared buffer (`0` = no buffer
+/// mapped).
+pub const NIC_OP_RECV: u32 = 5;
+/// The largest raw Ethernet frame (header + payload, excluding the
+/// 4-byte CRC the card itself appends/strips) this driver will send or
+/// deliver -- must match net_rtl8139's own `MAX_FRAME_SIZE` exactly,
+/// since it crosses the wire as the shared buffer's agreed capacity.
+pub const NIC_MAX_FRAME: usize = 1518;
+
+/// Establishes a connection to the NIC driver's protocol, same shape as
+/// `storage_connect`/`fs_connect`.
+#[allow(dead_code)]
+pub fn nic_connect(nic_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
+    send(nic_slot, NIC_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(nic_slot, NIC_OP_SET_REPLY, 0, 0, my_inbox_slot);
+}
+
+/// Returns the NIC's burned-in MAC address.
+#[allow(dead_code)]
+pub fn nic_get_mac(nic_slot: u32, my_inbox_slot: u32) -> [u8; 6] {
+    send(nic_slot, NIC_OP_GET_MAC, 0, 0, 0);
+    let r = recv(my_inbox_slot);
+    let w0 = r.w0.to_le_bytes();
+    let w1 = r.w1.to_le_bytes();
+    [w0[0], w0[1], w0[2], w0[3], w1[0], w1[1]]
+}
+
+/// Sends `len` bytes from the shared buffer (the caller fills it locally
+/// first) as one raw Ethernet frame. Returns `true` on success.
+#[allow(dead_code)]
+pub fn nic_send(nic_slot: u32, my_inbox_slot: u32, len: u32) -> bool {
+    send(nic_slot, NIC_OP_SEND, len, 0, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
+/// Blocks until the next raw Ethernet frame is received into the shared
+/// buffer, returning its length (`0` = no buffer mapped).
+#[allow(dead_code)]
+pub fn nic_recv(nic_slot: u32, my_inbox_slot: u32) -> u32 {
+    send(nic_slot, NIC_OP_RECV, 0, 0, 0);
+    recv(my_inbox_slot).w0
+}
+
+/// Port I/O helpers, shared by every userland driver that talks to
+/// hardware directly via `in`/`out` (storage_ata, net_rtl8139) instead of
+/// each keeping its own byte-for-byte identical copy. Only usable
+/// because the calling task was spawned with the relevant ports in its
+/// `allowed_ports` -- see `loader::spawn_from_module` in the kernel and
+/// each driver's own spawn call in `main.rs`; using a port outside that
+/// set faults with a `#GP`, not a graceful error return.
+#[inline(always)]
+pub unsafe fn outb(port: u16, value: u8) {
+    core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub unsafe fn outw(port: u16, value: u16) {
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inw(port: u16) -> u16 {
+    let value: u16;
+    core::arch::asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub unsafe fn outl(port: u16, value: u32) {
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inl(port: u16) -> u32 {
+    let value: u32;
+    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
 /// Console *input* wire protocol (see userland/drivers/console_server). A reader
 /// connects once (`console_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
@@ -540,7 +648,23 @@ pub fn map_memory(grant_slot: u32, virt_addr: u32) -> i32 {
 /// physical page into its own space too.
 #[allow(dead_code)]
 pub fn mem_alloc(virt_addr: u32) -> u32 {
-    unsafe { syscall_raw(SYS_MEM_ALLOC, virt_addr, 0, 0, 0, 0) }.eax
+    unsafe { syscall_raw(SYS_MEM_ALLOC, virt_addr, 1, 0, 0, 0) }.eax
+}
+
+/// Allocates `page_count` fresh, *physically contiguous* pages, maps them
+/// contiguously into the caller's own address space starting at
+/// `virt_addr`, and returns `(grant_slot, phys_base)` (`grant_slot == 0`
+/// and `phys_base == 0` together on failure -- the kernel clears both,
+/// not just the slot, so a caller can't mistake a failed call's leftover
+/// page_count for a real physical address). The NIC driver is the one
+/// caller that needs `phys_base`: its hardware DMA engine reads/writes
+/// physical memory directly, bypassing this task's own page tables
+/// entirely, so the driver has to tell it the buffer's real address
+/// rather than the virtual one it maps locally.
+#[allow(dead_code)]
+pub fn mem_alloc_pages(virt_addr: u32, page_count: u32) -> (u32, u32) {
+    let r = unsafe { syscall_raw(SYS_MEM_ALLOC, virt_addr, page_count, 0, 0, 0) };
+    (r.eax, r.ecx)
 }
 
 /// Returns the new task's id, or 0 if `module_index` doesn't exist.

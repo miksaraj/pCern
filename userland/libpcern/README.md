@@ -13,10 +13,14 @@ of its own.
 ## What's in here
 
 - **Syscall wrappers** (`send`, `recv`, `exit`, `yield_now`, `getpid`,
-  `register_irq`, `map_memory`, `mem_alloc`, `create_task`,
-  `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
-  `spawn_from_memory`) -- one function per syscall, matching the
+  `register_irq`, `map_memory`, `mem_alloc`, `mem_alloc_pages`,
+  `create_task`, `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
+  `spawn_from_memory`, `reboot`) -- one function per syscall, matching the
   numbers/argument registers in `kernel/src/syscall.rs`.
+- **Port I/O helpers** (`inb`/`outb`/`inw`/`outw`/`inl`/`outl`) -- shared
+  by every driver that talks to hardware directly (`storage_ata`,
+  `net_rtl8139`); only usable by a task actually granted the relevant
+  ports at spawn (see each driver's own README).
 - **Name-service helpers** (`lookup_name`, `lookup_name_retry`,
   `register_name`, `pack_name`) -- see `userland/services/nameservice/README.md`
   for the wire protocol these implement.
@@ -29,6 +33,8 @@ of its own.
   `console_set_mode`, `console_read_key`) -- see
   `userland/drivers/console_server/README.md`'s line-input and raw-mode protocol
   sections.
+- **NIC helpers** (`nic_connect`, `nic_get_mac`, `nic_send`, `nic_recv`)
+  -- see `userland/drivers/net_rtl8139/README.md`.
 - **`editor` module** (`editor::Editor`) -- a full-screen text editor's
   core logic (cursor-tracked buffer, key application, ANSI redraw),
   shared between `userland/bin/shell`'s `edit` command and

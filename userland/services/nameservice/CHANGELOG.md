@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-04
+
+### Added
+
+- `(6, "net")` added to the registration allowlist for the new
+  `net_rtl8139` NIC driver, which lands at task id 6 -- spawned *last*,
+  after every other task with a guaranteed id, so a boot with no card
+  attached simply leaves that id unallocated instead of letting the next
+  spawn slide into it -- in both the production boot and the standalone
+  `nic_test` harness.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release.

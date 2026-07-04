@@ -75,6 +75,26 @@ standing, permanent (if separate) boot configuration -- see
 `run_tests.sh`. Prefer extending that harness over hand-editing the
 production boot sequence when adding a new regression test.
 
+### Phase/Checkpoint labels stay out of user-facing docs
+
+"Phase 8", "Checkpoint W", and similar internal milestone labels are this
+file's vocabulary for talking about *how* the project was built -- they
+name a step in the development process, not a property of the software
+itself. A reader of a README or CHANGELOG shouldn't need to know this
+project ships in checkpoints to understand what a component does or what
+changed release to release, and the label adds nothing a plain
+description of the change doesn't already say better. So: never write a
+checkpoint/phase label into a README.md or CHANGELOG.md (root, kernel, or
+any userland crate's) -- state the technical content directly instead
+(e.g. "ATA/IDE write support" rather than "ATA/IDE write support
+(Checkpoint P)"). This label is fine, and expected, in this file and in
+code comments, where it documents process for whoever picks up
+development next (see "The checkpoint methodology" above) -- the
+distinction is docs *describing the software* versus docs *describing how
+it was built*. This rule was already applied once as a cleanup pass
+(commit `b3edaf8`) before being written down here; write it down instead
+of relying on remembering to repeat the cleanup.
+
 ## Design decisions worth knowing about
 
 ### Capabilities are the actual security boundary

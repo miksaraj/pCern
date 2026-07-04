@@ -84,3 +84,56 @@ pub fn free_frame(phys_addr: usize) {
     let bitmap = guard.as_mut().expect("frame allocator not initialized");
     bitmap.set_used(phys_addr / FRAME_SIZE, false);
 }
+
+/// Allocates `count` *physically contiguous* frames, returning the
+/// address of the first one. Checkpoint W needs this for a DMA-capable
+/// device's ring buffer (the RTL8139's receive ring): the card's own DMA
+/// engine writes directly to physical memory with no concept of page
+/// tables, so a buffer backed by scattered single frames -- all this
+/// allocator supported before, via `alloc_frame` -- wouldn't appear
+/// contiguous to it the way it needs to.
+///
+/// A linear scan for the first run of `count` free frames -- no need for
+/// anything fancier (a free-list keyed by run length, buddy allocation)
+/// at this kernel's scale, and every existing caller of `alloc_frame`
+/// keeps working unchanged since this is purely additive. Returns `None`
+/// without marking anything used if no long-enough run exists; a
+/// found run is marked used atomically (under the same lock the whole
+/// scan holds), never partially on a later failure.
+pub fn alloc_frames_contiguous(count: usize) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    let mut guard = BITMAP.lock();
+    let bitmap = guard.as_mut().expect("frame allocator not initialized");
+
+    let mut run_start = 0usize;
+    let mut run_len = 0usize;
+    for frame in 0..bitmap.frame_count {
+        if bitmap.is_used(frame) {
+            run_len = 0;
+            run_start = frame + 1;
+        } else {
+            run_len += 1;
+            if run_len == count {
+                for f in run_start..run_start + count {
+                    bitmap.set_used(f, true);
+                }
+                return Some(run_start * FRAME_SIZE);
+            }
+        }
+    }
+    None
+}
+
+/// Frees `count` contiguous frames starting at `phys_addr`, the
+/// counterpart to `alloc_frames_contiguous`.
+#[allow(dead_code)]
+pub fn free_frames_contiguous(phys_addr: usize, count: usize) {
+    let mut guard = BITMAP.lock();
+    let bitmap = guard.as_mut().expect("frame allocator not initialized");
+    let first = phys_addr / FRAME_SIZE;
+    for f in first..first + count {
+        bitmap.set_used(f, false);
+    }
+}

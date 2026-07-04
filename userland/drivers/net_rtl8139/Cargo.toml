@@ -1,10 +1,14 @@
 [package]
-name = "cap_test"
-version = "0.5.0"
+name = "net_rtl8139"
+version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "net_rtl8139"
+path = "src/main.rs"
+
 [dependencies]
-libpcern = { path = "../libpcern" }
+libpcern = { path = "../../libpcern" }
 
 [profile.dev]
 panic = "abort"

@@ -31,6 +31,11 @@ the way it is.
   keyboard controller's reset line -- the one piece of infrastructure a
   future in-place update mechanism needs beyond a writable boot disk
   (see the root README's `make disk`).
+- A minimal PCI configuration-space enumerator, used at boot to discover
+  a NIC's I/O-port range and interrupt line and hand both to its driver
+  the same way legacy hardware's fixed ports/IRQs are hand-wired --
+  everything actually talking to PCI hardware still lives in userland,
+  same as every other driver.
 
 Nothing else. No filesystem, no block device driver, no window into
 physical memory beyond what a capability specifically grants -- all of that
@@ -84,6 +89,7 @@ grub-keytest.cfg            keyboard-input test boot config (make test-keyboard 
 grub-rawtest.cfg            raw-input test boot config (make test-raw-input only)
 grub-editortest.cfg         editor test boot config (make test-editor only)
 grub-reboottest.cfg         reboot-syscall test boot config (make test-reboot only)
+grub-nictest.cfg            NIC-driver test boot config (make test-nic only)
 CHANGELOG.md                this crate's release history (Keep a Changelog + SemVer)
 ```
 

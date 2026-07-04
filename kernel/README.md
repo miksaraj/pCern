@@ -27,6 +27,10 @@ the way it is.
   revocation cascades to every capability derived from the revoked one.
 - Rendezvous IPC (`send`/`recv`) addressed by capability slot, not by task
   ID.
+- A capability-gated reboot syscall (`SYS_REBOOT`), pulsing the 8042
+  keyboard controller's reset line -- the one piece of infrastructure a
+  future in-place update mechanism needs beyond a writable boot disk
+  (see the root README's `make disk`).
 
 Nothing else. No filesystem, no block device driver, no window into
 physical memory beyond what a capability specifically grants -- all of that
@@ -73,11 +77,13 @@ src/                        kernel source (ring 0)
 .cargo/config.toml          build-std config + target selection
 i686-pcern.json             custom bare-metal target spec
 linker.ld                   higher-half linker script
-grub.cfg                    production boot config
+grub.cfg                    production boot config (CD ISO)
+grub-disk.cfg               installed-disk boot config, embedded into core.img (make disk)
 grub-test.cfg               test-harness boot config (make test only)
 grub-keytest.cfg            keyboard-input test boot config (make test-keyboard only)
 grub-rawtest.cfg            raw-input test boot config (make test-raw-input only)
 grub-editortest.cfg         editor test boot config (make test-editor only)
+grub-reboottest.cfg         reboot-syscall test boot config (make test-reboot only)
 CHANGELOG.md                this crate's release history (Keep a Changelog + SemVer)
 ```
 

@@ -24,7 +24,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86
+          sudo apt-get install -y nasm grub-common grub-pc-bin xorriso mtools qemu-system-x86 dosfstools fdisk
 
       - name: Build kernel + default userland (release ISO)
         run: make iso

@@ -29,6 +29,7 @@ const SYS_CAP_MINT_BADGED: u32 = 10;
 const SYS_CAP_REVOKE: u32 = 11;
 const SYS_MEM_ALLOC: u32 = 12;
 const SYS_SPAWN_FROM_MEMORY: u32 = 13;
+const SYS_REBOOT: u32 = 14;
 
 /// Error sentinel returned in `eax` when a capability argument doesn't
 /// resolve to what a syscall needed, or the request is otherwise invalid.
@@ -180,6 +181,13 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
             regs.eax = sys_mem_alloc(regs.ebx as usize);
         }
         SYS_SPAWN_FROM_MEMORY => regs.eax = sys_spawn_from_memory(regs),
+        SYS_REBOOT => match resolve_current_cap(regs.ebx) {
+            // `ebx`=capability slot holding a RebootControl -- holding a
+            // valid one is itself sufficient authorization, same pattern
+            // as SYS_REGISTER_IRQ/SYS_MAP_MEMORY above. Never returns.
+            Some((CapKind::RebootControl, _badge)) => crate::reboot::reset(),
+            _ => regs.eax = ERR,
+        },
         _ => regs.eax = ERR,
     }
 }

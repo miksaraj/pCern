@@ -40,6 +40,22 @@ SHELL_TARGET := i686-pcern-user
 SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
 SHELL_BIN := $(USERLAND_DIR)/shell.bin
 
+# Every default userland service, in main.rs's fixed spawn order. `iso`
+# iterates this list (instead of hand-listing every binary separately) so
+# a future service only needs adding here once, not as two separately
+# hand-kept copies (this list, and `disk`'s below) that could silently
+# drift apart.
+PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
+# `disk`'s own copy of the same list, paired (`path:8.3-name`) with the
+# uppercase short name each binary lands under on the FAT32 boot disk --
+# unlike `iso`'s ISO9660+Rock Ridge (which tolerates the binaries'
+# ordinary lowercase basenames above), the FAT32 partition GRUB's `fat`
+# module and this project's own `fs_fat32` both read only supports
+# classic 8.3 short names. Kept as one paired list, not two separate
+# parallel ones, so there's no way for the two to fall out of sync with
+# each other by reordering.
+PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(SHELL_BIN):SHELL.BIN
+
 CP := cp
 RM := rm -rf
 MKDIR := mkdir -pv
@@ -91,6 +107,15 @@ BOOT_EDITORTEST_PATH := $(ISO_EDITORTEST_PATH)/boot
 GRUB_EDITORTEST_PATH := $(BOOT_EDITORTEST_PATH)/grub
 ISO_EDITORTEST := pcern-editortest-i386.iso
 
+# Checkpoint V's reboot-syscall test harness: its own standalone kernel
+# build (--features reboot_test) + grub config + ISO, same reason as the
+# other *_test harnesses above -- see run_reboot_test.sh's doc comment.
+CFG_REBOOTTEST := $(KERNEL_DIR)/grub-reboottest.cfg
+ISO_REBOOTTEST_PATH := iso-reboottest
+BOOT_REBOOTTEST_PATH := $(ISO_REBOOTTEST_PATH)/boot
+GRUB_REBOOTTEST_PATH := $(BOOT_REBOOTTEST_PATH)/grub
+ISO_REBOOTTEST := pcern-reboottest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -101,6 +126,27 @@ MTOOLS_MFORMAT := mformat
 MTOOLS_MCOPY := mcopy
 TESTDATA_DIR := testdata
 TEST_FAT32_IMG := test_fat32.img
+
+# Checkpoint U: an installed FAT32 boot disk -- `make disk`'s whole point
+# is that this is a real, writable disk image GRUB itself boots from (see
+# `run-disk`/`test-disk-boot` below), not the read-only `iso`/ISO9660
+# tooling above. Unlike the "superfloppy" FAT32 test image above (a bare
+# FAT32 filesystem at LBA 0, no partition table), this disk needs a real
+# MBR partition table: GRUB's `i386-pc` BIOS install embeds its own
+# core.img in the gap between the MBR and the first partition, and a bare
+# FAT32 filesystem has no such gap for it to use (see fs_fat32's own
+# CHANGELOG/find_fat32_base for how it stays compatible with both
+# layouts). GRUB_BIOS_SETUP's path is Debian/Ubuntu-specific
+# (grub-pc-bin's layout) -- override it on other distros the same way the
+# README already flags grub-mkrescue's own Debian/Ubuntu-centric default.
+DISK_IMG := zephyrlite-i386.img
+DISK_SIZE_MB := 64
+DISK_PART_START_SECTOR := 2048
+DISK_BUILD_DIR := disk-build
+DISK_FAT_IMG := disk-fat.img
+CFG_DISK := $(KERNEL_DIR)/grub-disk.cfg
+GRUB_I386_PC_MODULES := fat multiboot part_msdos biosdisk normal serial terminal
+GRUB_BIOS_SETUP := /usr/lib/grub/i386-pc/grub-bios-setup
 
 .PHONY: all
 all: iso
@@ -160,16 +206,14 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/editor_input_test $(USERLAND_DIR)/editor_input_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/reboot_test $(USERLAND_DIR)/reboot_test.bin
 
 .PHONY: iso
 iso: kernel userland
 	$(MKDIR) $(GRUB_PATH)
 	$(CP) $(KERNEL_BIN) $(BOOT_PATH)/pcern.elf
-	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_PATH)/console_server.bin
-	$(CP) $(NAMESERVICE_BIN) $(BOOT_PATH)/nameservice.bin
-	$(CP) $(STORAGE_ATA_BIN) $(BOOT_PATH)/storage_ata.bin
-	$(CP) $(FS_FAT32_BIN) $(BOOT_PATH)/fs_fat32.bin
-	$(CP) $(SHELL_BIN) $(BOOT_PATH)/shell.bin
+	$(foreach bin,$(PROD_USERLAND_BINS),$(CP) $(bin) $(BOOT_PATH)/$(notdir $(bin));)
 	$(CP) $(CFG) $(GRUB_PATH)
 	grub-mkrescue -o $(ISO) $(ISO_PATH)
 
@@ -257,12 +301,35 @@ iso-editortest: kernel-editortest userland cap_test
 test-editor: iso-editortest test-fat32-image
 	./run_editor_test.sh $(ISO_EDITORTEST) $(TEST_FAT32_IMG)
 
+.PHONY: kernel-reboottest
+kernel-reboottest:
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features reboot_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-reboottest
+iso-reboottest: kernel-reboottest userland cap_test
+	$(MKDIR) $(GRUB_REBOOTTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_REBOOTTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_REBOOTTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_REBOOTTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_REBOOTTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_REBOOTTEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/reboot_test.bin $(BOOT_REBOOTTEST_PATH)/reboot_test.bin
+	$(CP) $(CFG_REBOOTTEST) $(GRUB_REBOOTTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_REBOOTTEST) $(ISO_REBOOTTEST_PATH)
+
+.PHONY: test-reboot
+test-reboot: iso-reboottest
+	./run_reboot_test.sh $(ISO_REBOOTTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
 	$(MAKE) test-keyboard
 	$(MAKE) test-raw-input
 	$(MAKE) test-editor
+	$(MAKE) test-reboot
+	$(MAKE) test-disk-boot
 
 .PHONY: test-fat32-image
 test-fat32-image: cap_test
@@ -277,6 +344,60 @@ test-fat32-image: cap_test
 run: iso
 	qemu-system-i386 -cdrom $(ISO) -serial stdio
 
+# Checkpoint U: builds $(DISK_IMG), a real installed FAT32 boot disk --
+# see the variable block above for why it needs an MBR partition table
+# GRUB can embed core.img into, unlike the plain "superfloppy" FAT32 test
+# image `test-fat32-image` builds. Every payload binary lands as an
+# ordinary root-level file on the FAT32 partition via mtools, through the
+# exact same 8.3-name/root-directory-only interface fs_fat32's own
+# runtime read/write protocol already supports -- nothing about *how*
+# these files get there is special-cased for boot; a real update
+# mechanism (ZephyrLite's own Checkpoint Z, not yet built) would overwrite
+# them the same way. GRUB's own bootstrap machinery (core.img, embedded
+# straight into the raw sectors between the MBR and this partition) is
+# written once by grub-mkstandalone/grub-bios-setup below and never
+# touched by fs_fat32 at runtime -- it doesn't even live inside the FAT32
+# filesystem fs_fat32 can see.
+#
+# grub-bios-setup itself needs `sudo`: it always resolves what device
+# backs its own `-d` source directory (to record a fallback GRUB `root`
+# environment variable, even though our grub-disk.cfg immediately
+# overrides it) by opening that device's raw node, which needs root
+# regardless of the fact that DEST is a plain file we own -- the exact
+# same requirement a real `grub-install` has on real hardware. Every
+# other step here (partitioning, formatting, mtools) works unprivileged.
+.PHONY: disk
+disk: kernel userland
+	$(RM) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)
+	$(MKDIR) $(DISK_BUILD_DIR)
+	grub-mkstandalone -O i386-pc -o $(DISK_BUILD_DIR)/core.img \
+		--install-modules="$(GRUB_I386_PC_MODULES)" \
+		--modules="$(GRUB_I386_PC_MODULES)" \
+		--fonts="" --locales="" --themes="" \
+		"boot/grub/grub.cfg=$(CFG_DISK)"
+	$(CP) /usr/lib/grub/i386-pc/boot.img $(DISK_BUILD_DIR)/boot.img
+	truncate -s $(DISK_SIZE_MB)M $(DISK_IMG)
+	printf 'label: dos\nunit: sectors\nstart=%s, type=c\n' $(DISK_PART_START_SECTOR) | sfdisk $(DISK_IMG)
+	mkfs.vfat -F 32 -n ZLBOOT -C $(DISK_FAT_IMG) \
+		$$(( ($(DISK_SIZE_MB) * 2048 - $(DISK_PART_START_SECTOR)) / 2 ))
+	for pair in $(PROD_USERLAND_DISK_FILES); do \
+		src="$${pair%%:*}"; dst="$${pair#*:}"; \
+		$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) "$$src" "::$$dst"; \
+	done
+	$(MTOOLS_MCOPY) -i $(DISK_FAT_IMG) $(KERNEL_BIN) ::PCERN.ELF
+	dd if=$(DISK_FAT_IMG) of=$(DISK_IMG) bs=512 seek=$(DISK_PART_START_SECTOR) conv=notrunc,sparse status=none
+	printf '(hd0)\t%s\n' $(DISK_IMG) > $(DISK_BUILD_DIR)/device.map
+	sudo $(GRUB_BIOS_SETUP) -d $(DISK_BUILD_DIR) -b boot.img -c core.img \
+		-m $(DISK_BUILD_DIR)/device.map $(DISK_IMG)
+
+.PHONY: run-disk
+run-disk: disk
+	qemu-system-i386 -drive file=$(DISK_IMG),if=ide,index=0,format=raw -boot c -serial stdio
+
+.PHONY: test-disk-boot
+test-disk-boot: disk
+	./run_disk_boot_test.sh $(DISK_IMG)
+
 .PHONY: clean
 clean:
 	cd $(KERNEL_DIR) && $(CARGO) clean
@@ -286,4 +407,4 @@ clean:
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)

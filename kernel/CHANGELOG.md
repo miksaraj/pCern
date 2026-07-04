@@ -20,6 +20,20 @@ historical context.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-04
+
+### Added
+
+- `SYS_REBOOT` (syscall 14): resets the machine by pulsing the 8042
+  keyboard controller's CPU-reset output line -- the standard software
+  reset technique for x86 systems with no ACPI reset register support
+  (this kernel has none). Gated by a new zero-data `CapKind::RebootControl`
+  capability, the same "holding it is the whole check" pattern as
+  `IrqControl`/`MemoryGrant`; today only a dedicated test fixture
+  (`reboot_test`, its own standalone `--features reboot_test` boot
+  configuration -- see `make test-reboot`) is ever handed one, since the
+  real intended holder (an update service) doesn't exist yet.
+
 ## [0.4.0] - 2026-07-03
 
 Read, write, and edit text files: a real full-screen editor, built on top

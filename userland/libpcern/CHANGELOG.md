@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-04
+
+### Added
+
+- `reboot`/`SYS_REBOOT`: resets the machine via a `RebootControl`
+  capability slot. Returns normally (rather than `-> !`) if the syscall is
+  rejected, so a caller holding an invalid slot can detect and report the
+  failure instead of the wrapper asserting unreachability that isn't
+  actually guaranteed.
+
 ## [0.3.0] - 2026-07-03
 
 ### Added

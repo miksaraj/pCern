@@ -50,6 +50,14 @@ pub enum CapKind {
         irq: u32,
         endpoint: EndpointId,
     },
+    /// Checkpoint V: zero-data -- holding it is itself sufficient
+    /// authorization for `SYS_REBOOT` (see reboot.rs), same "holding it is
+    /// the whole check" pattern as `IrqControl`/`MemoryGrant`. Minted and
+    /// hand-wired at spawn time the same way every other hardware-adjacent
+    /// capability in main.rs is; today only a dedicated test fixture holds
+    /// one, since the real intended holder (an update service) doesn't
+    /// exist yet.
+    RebootControl,
 }
 
 struct CapNode {

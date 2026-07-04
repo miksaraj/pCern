@@ -38,6 +38,27 @@ for the full rationale behind keeping these two axes separate.
 
 ## [Unreleased]
 
+## [26.07-alpha.2] - 2026-07-04
+
+### Added
+
+- ZephyrLite now installs to, and boots from, its own writable FAT32 disk
+  (`make disk` builds it; `make run-disk` boots it) instead of only ever
+  running from a read-only CD ISO -- the foundation an in-place update
+  mechanism needs, since a file written to the old CD-only setup's
+  separate data disk was never something GRUB could load as a boot
+  module. The kernel, every default userland service, and GRUB's own
+  bootstrap files now live together on one real, partitioned disk image;
+  `fs_fat32` gained the ability to find a FAT32 volume inside an MBR
+  partition table (not just at the very start of the disk) to support
+  this, while staying fully compatible with every existing unpartitioned
+  disk/test image.
+- A new `SYS_REBOOT` syscall resets the machine (via the 8042 keyboard
+  controller's reset line), gated by a new capability so only a task
+  explicitly handed one can trigger it -- the other piece an in-place
+  update mechanism needs, to apply an update by simply restarting into
+  it. Not yet wired up to anything user-facing; that's future work.
+
 ## [26.07-alpha.1] - 2026-07-03
 
 The first ZephyrLite release.

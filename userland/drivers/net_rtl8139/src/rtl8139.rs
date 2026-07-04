@@ -12,7 +12,7 @@
 //! hardware has), and no attempt to pipeline a second send before the
 //! first completes.
 
-use crate::port::{inb, inl, inw, outb, outl, outw};
+use libpcern::{inb, inl, inw, outb, outl, outw};
 
 // Register offsets, relative to the discovered I/O-BAR base (see
 // main.rs).
@@ -46,30 +46,49 @@ const RCR_WRAP: u32 = 1 << 7; // card pads rather than splitting a packet across
 
 const TSD_OWN: u32 = 1 << 13; // set BY THE CARD once it's done with the descriptor (successfully or not)
 
-/// The receive ring's *nominal* size: 8K+16, the smallest of the four
-/// sizes the hardware supports (selected by RCR's RBLEN field, left at
-/// its default 0 = this size). The buffer actually allocated for it (see
-/// main.rs) is larger by another 1500 bytes: `RCR_WRAP` above promises
-/// the card it never needs to split a packet's bytes across the ring's
-/// physical end, in exchange for the driver reserving that much
-/// additional headroom past the nominal boundary for it to spill into.
-pub const RX_RING_SIZE: usize = 8192 + 16;
-/// Total bytes the receive buffer must actually be, including the
-/// `RCR_WRAP` overflow margin above.
-pub const RX_BUF_BYTES: usize = RX_RING_SIZE + 1500;
+/// The receive ring's *nominal* size: 8192 bytes, the smallest of the
+/// four sizes the hardware supports (selected by RCR's RBLEN field, left
+/// at its default 0 = this size) -- and the modulus the card's own
+/// internal ring pointer actually wraps against. This is deliberately
+/// *not* the same as the buffer's physical allocation size below: the
+/// "8K+16" figure the datasheet uses for this RBLEN setting is 16 bytes
+/// of allocation slack the card's DMA engine can write past the nominal
+/// 8192-byte boundary for a packet header that straddles it, not a wider
+/// wrap point -- using it as the wrap modulus instead of 8192 previously
+/// desynced this driver's read offset from the card's real ring position
+/// by up to 16 bytes every time a packet's end landed in that gap.
+pub const RX_RING_WRAP: usize = 8192;
+/// Total bytes the receive buffer must actually be: the nominal ring
+/// size, padded by the "8K+16" RBLEN figure's 16 bytes of DMA slack,
+/// plus the additional 1500-byte overflow margin `RCR_WRAP` promises the
+/// card it never needs to split a packet's bytes across the ring's
+/// physical end.
+pub const RX_BUF_BYTES: usize = RX_RING_WRAP + 16 + 1500;
 /// The largest raw Ethernet frame (header + payload, excluding the
 /// 4-byte CRC the card appends/strips) this driver will send or deliver.
 pub const MAX_FRAME_SIZE: usize = 1518;
 
+/// A generous bound on how many times this driver will poll a
+/// self-clearing hardware bit before giving up, shared by `init`'s reset
+/// wait and `send`'s transmit-complete wait -- far more iterations than
+/// either condition should ever legitimately take (a reset completes in
+/// microseconds; transmitting `MAX_FRAME_SIZE` bytes at Fast Ethernet
+/// speed is on a similar order), purely as a last-resort guard against a
+/// stuck card leaving this driver's single-threaded loop spinning
+/// forever instead of ever answering another client or interrupt again.
+const MAX_HARDWARE_POLLS: u32 = 1_000_000;
+
 /// Initializes the card: resets it, points it at the (already allocated)
 /// receive ring, enables RX/TX and the two interrupt conditions this
-/// driver cares about, and returns the card's burned-in MAC address.
+/// driver cares about, and returns the card's burned-in MAC address --
+/// or `None` if the card never finished resetting (see
+/// `MAX_HARDWARE_POLLS`), which this driver has no way to recover from.
 /// `rx_buf_phys` must be the physical address of a buffer at least
 /// `RX_BUF_BYTES` long and physically contiguous -- the card's DMA
 /// engine writes to it directly, with no notion of this task's own page
 /// tables, so scattered pages that merely *look* contiguous in this
 /// task's own virtual address space would not work.
-pub fn init(io_base: u16, rx_buf_phys: u32) -> [u8; 6] {
+pub fn init(io_base: u16, rx_buf_phys: u32) -> Option<[u8; 6]> {
     unsafe {
         // Power on (clear any sleep/power-down bits). A no-op under
         // QEMU's emulated card, which is already active on reset, but
@@ -77,7 +96,13 @@ pub fn init(io_base: u16, rx_buf_phys: u32) -> [u8; 6] {
         outb(io_base + REG_CONFIG1, 0x00);
 
         outb(io_base + REG_CR, CR_RST);
-        while inb(io_base + REG_CR) & CR_RST != 0 {}
+        let mut polls = 0u32;
+        while inb(io_base + REG_CR) & CR_RST != 0 {
+            polls += 1;
+            if polls >= MAX_HARDWARE_POLLS {
+                return None;
+            }
+        }
 
         let mut mac = [0u8; 6];
         for (i, byte) in mac.iter_mut().enumerate() {
@@ -89,7 +114,7 @@ pub fn init(io_base: u16, rx_buf_phys: u32) -> [u8; 6] {
         outl(io_base + REG_RCR, RCR_APM | RCR_AM | RCR_AB | RCR_WRAP);
         outb(io_base + REG_CR, CR_RE | CR_TE);
 
-        mac
+        Some(mac)
     }
 }
 
@@ -113,7 +138,8 @@ pub fn ack_interrupt(io_base: u16) -> u16 {
 /// storage_ata's own PIO loop already uses for an analogous wait; this
 /// scheduler preempts on the timer tick regardless, so a polling loop
 /// here can't starve anything else -- until the card reports it's done
-/// with the descriptor. Returns `false` if `frame` doesn't fit.
+/// with the descriptor, or `MAX_HARDWARE_POLLS` is reached. Returns
+/// `false` if `frame` doesn't fit or the card never finished.
 pub fn send(io_base: u16, tx_buf_virt: usize, tx_buf_phys: u32, frame: &[u8]) -> bool {
     if frame.is_empty() || frame.len() > MAX_FRAME_SIZE {
         return false;
@@ -130,7 +156,13 @@ pub fn send(io_base: u16, tx_buf_virt: usize, tx_buf_phys: u32, frame: &[u8]) ->
         // "succeeded" (no TOK/TABT inspection), matching the same
         // best-effort level of care as the rest of this checkpoint.
         outl(io_base + REG_TSD0, frame.len() as u32);
-        while inl(io_base + REG_TSD0) & TSD_OWN == 0 {}
+        let mut polls = 0u32;
+        while inl(io_base + REG_TSD0) & TSD_OWN == 0 {
+            polls += 1;
+            if polls >= MAX_HARDWARE_POLLS {
+                return false;
+            }
+        }
     }
     true
 }
@@ -189,13 +221,13 @@ pub fn receive(io_base: u16, rx_buf_virt: usize, cur_rx: &mut u16, out: &mut [u8
             // 4-byte header + its (CRC-inclusive) length, rounded up.
             let advance = (length as u32 + 4 + 3) & !3;
             let mut next = *cur_rx as u32 + advance;
-            if next > RX_RING_SIZE as u32 {
+            if next > RX_RING_WRAP as u32 {
                 // This packet's bytes spilled into the WRAP overflow
                 // margin past the nominal ring boundary -- fold the
                 // offset back into the nominal range, matching where the
                 // card's own hardware pointer will actually be once it
                 // truly wraps back to physical offset 0.
-                next -= RX_RING_SIZE as u32;
+                next -= RX_RING_WRAP as u32;
             }
             *cur_rx = next as u16;
             // The card's read-pointer register is documented to sit 16

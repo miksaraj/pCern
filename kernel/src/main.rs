@@ -200,25 +200,6 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
-    // Checkpoint W: the RTL8139 NIC driver, if PCI enumeration actually
-    // finds one attached (QEMU only emulates one when told to via
-    // `-device rtl8139`) -- module index 4, shifting shell to module
-    // index 5 below. Spawned in the production path only, the same
-    // exclusion list as shell just below: the standalone `nic_test`
-    // harness spawns it separately (nic_test_spawn), at the same task id,
-    // via its own dedicated module list.
-    #[cfg(not(any(
-        feature = "test_harness",
-        feature = "keyboard_test",
-        feature = "raw_input_test",
-        feature = "editor_test",
-        feature = "reboot_test",
-        feature = "nic_test"
-    )))]
-    if spawn_net_rtl8139(4).is_none() {
-        println!("[ \x1b[1;33mwarn\x1b[0m ] no RTL8139 NIC found via PCI enumeration -- networking unavailable this boot");
-    }
-
     // Checkpoint N: the interactive shell -- purely an IPC client of
     // console_server/fs_fat32/name-service, no hardware ports or
     // capabilities of its own beyond the usual CSlot 1/2 convention.
@@ -228,8 +209,11 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // the "single reader at a time" role, and would shift every fixture's
     // task id (used throughout run_tests.sh/console_input_test's own
     // script) in the test_harness build for no benefit, since nothing
-    // there exercises it anyway. Module index 5, not 4: see
-    // spawn_net_rtl8139 just above.
+    // there exercises it anyway. Module index 4, spawned *before*
+    // spawn_net_rtl8139 below (module index 5) so shell's own id is
+    // always deterministic (5) regardless of whether a NIC is attached --
+    // see spawn_net_rtl8139's own doc comment for why the optional one
+    // must always come last.
     #[cfg(not(any(
         feature = "test_harness",
         feature = "keyboard_test",
@@ -239,10 +223,34 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
         feature = "nic_test"
     )))]
     {
-        let shell_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'shell'");
+        let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
         println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'shell' (id={})", shell_id);
+        assert_eq!(shell_id, 5, "spawn_net_rtl8139 assumes shell is task id 5, so it always lands at id 6 when present");
         let shell_endpoint = ipc::create_endpoint(shell_id);
         grant_endpoint_cap(shell_id, shell_endpoint); // shell's CSlot 2: its own inbox
+    }
+
+    // Checkpoint W: the RTL8139 NIC driver, if PCI enumeration actually
+    // finds one attached (QEMU only emulates one when told to via
+    // `-device rtl8139`) -- module index 5, spawned *last* and only in
+    // the production path (the standalone `nic_test` harness spawns it
+    // separately, at the same relative position, via its own dedicated
+    // module list). Deliberately last: `spawn_net_rtl8139` returns early
+    // without consuming a task id when no card is found, so if anything
+    // were spawned after it, that task would silently slide into the id
+    // nameservice's ALLOWLIST hardcodes to "net" -- letting it register
+    // that trusted name in the real driver's place. Spawning it last
+    // means its absence just leaves that id never allocated to anyone.
+    #[cfg(not(any(
+        feature = "test_harness",
+        feature = "keyboard_test",
+        feature = "raw_input_test",
+        feature = "editor_test",
+        feature = "reboot_test",
+        feature = "nic_test"
+    )))]
+    if spawn_net_rtl8139(5).is_none() {
+        println!("[ \x1b[1;33mwarn\x1b[0m ] no RTL8139 NIC found via PCI enumeration -- networking unavailable this boot");
     }
 
     #[cfg(feature = "test_harness")]
@@ -474,10 +482,15 @@ fn reboot_test_spawn() {
 ///   different purpose (bulk memory sharing) rather than adding a new
 ///   syscall just to pass one integer at spawn time.
 ///
-/// Called from the same spot (right after fs_fat32, before whatever
-/// module comes next) in both the production boot and the standalone
-/// `nic_test` harness, so it lands at the same task id -- 5 -- either
-/// way; nameservice's own ALLOWLIST hardcodes that id to the name "net".
+/// Called last (after every other deterministically-spawned task) in
+/// both the production boot and the standalone `nic_test` harness, so it
+/// always lands at the same task id -- 6 -- when it lands at all;
+/// nameservice's own ALLOWLIST hardcodes that id to the name "net". This
+/// function returning `None` without ever calling `spawn_from_module`
+/// consumes no task id, so as long as nothing is spawned after it, its
+/// absence simply leaves id 6 unallocated instead of letting the next
+/// spawn silently slide into it -- see the call site's own comment for
+/// why "spawned last" is the actual fix, not just a convention.
 fn spawn_net_rtl8139(module_index: usize) -> Option<task::TaskId> {
     use alloc::vec::Vec;
 
@@ -490,7 +503,7 @@ fn spawn_net_rtl8139(module_index: usize) -> Option<task::TaskId> {
     let nic_id = loader::spawn_from_module(module_index, &allowed_ports)?;
     // See the identical assert on console_id earlier in this file --
     // nameservice's ALLOWLIST hardcodes this task id to "net".
-    assert_eq!(nic_id, 5, "nameservice's ALLOWLIST assumes net_rtl8139 is task id 5");
+    assert_eq!(nic_id, 6, "nameservice's ALLOWLIST assumes net_rtl8139 is task id 6");
     println!(
         "[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'net_rtl8139' (id={}, pci={:#06x}:{:#06x}, io_base={:#06x}, irq={})",
         nic_id, nic.vendor_id, nic.device_id, io_base, irq
@@ -532,20 +545,23 @@ fn spawn_net_rtl8139(module_index: usize) -> Option<task::TaskId> {
 /// the one grub config whose module list matches the indices below.
 /// Unlike every other `*_test_spawn` here, this one still needs the full
 /// nameservice/console_server/storage_ata/fs_fat32 stack the shared code
-/// above always spawns (module indices 0-3 in every build): `.expect`s
-/// (not the graceful `None` tolerance production boot uses) that PCI
-/// enumeration actually finds an RTL8139, since this harness's whole
-/// point is exercising it, then spawns `nic_test` itself with no
-/// hand-wired capabilities beyond the usual CSlot 1/2 convention -- it
-/// reaches the driver by looking up "net" through the name service, the
-/// same way any other client would.
+/// above always spawns (module indices 0-3 in every build). `nic_test`
+/// itself is spawned first (module index 4, task id 5, no hand-wired
+/// capabilities beyond the usual CSlot 1/2 convention -- it reaches the
+/// driver by looking up "net" through the name service, retrying until
+/// it appears), then `spawn_net_rtl8139` last (module index 5, task id
+/// 6): the same "optional thing spawned last" ordering the production
+/// boot uses, just with `.expect()` instead of the graceful `None`
+/// tolerance production boot uses, since this harness's whole point is
+/// exercising the driver and a missing `-device rtl8139` here is a test
+/// setup bug, not a real "no NIC" boot.
 #[cfg(feature = "nic_test")]
 fn nic_test_spawn() {
-    spawn_net_rtl8139(4).expect("nic_test requires -device rtl8139 in this boot's QEMU invocation");
-
-    let nic_test_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'nic_test'");
+    let nic_test_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'nic_test'");
     let nic_test_endpoint = ipc::create_endpoint(nic_test_id);
     grant_endpoint_cap(nic_test_id, nic_test_endpoint); // its CSlot 2: its own inbox
+
+    spawn_net_rtl8139(5).expect("nic_test requires -device rtl8139 in this boot's QEMU invocation");
 
     println!(
         "[ \x1b[1;32mok\x1b[0m ] nic_test: spawned nic_test (id={})",

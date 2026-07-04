@@ -49,16 +49,24 @@ syscall) just to pass one integer at spawn time.
   enough for the current test fixture, and console_server's raw-mode
   key queue for what a real queue would look like if a future client
   needs one.
-- The receive ring is 8K+16 (the smallest of the four sizes the hardware
-  supports) plus a 1500-byte overflow margin (`RCR`'s `WRAP` bit): the
-  card is allowed to spill a packet's tail past the nominal boundary
-  rather than ever splitting one across the ring's physical end, which
-  keeps this driver's own ring-parsing logic from needing to handle that
-  case at all.
-- Reset is a plain busy-wait on `CR`'s `RST` bit until the card clears it
-  itself -- the same polling-not-interrupt-driven approach storage_ata's
-  own PIO loop already uses for an analogous wait, since this scheduler
-  preempts on the timer tick regardless.
+- The receive ring's nominal size is 8192 bytes (the smallest of the four
+  sizes the hardware supports, and the modulus the card's own ring
+  pointer wraps against), allocated with two kinds of padding on top:
+  the "8K+16" RBLEN datasheet figure's 16 bytes of DMA slack, and a
+  further 1500-byte overflow margin (`RCR`'s `WRAP` bit) the card is
+  allowed to spill a packet's tail into rather than ever splitting one
+  across the ring's physical end -- keeping this driver's own
+  ring-parsing logic from needing to handle that case at all. Only the
+  8192-byte figure is ever used as the wrap boundary; the allocation
+  padding is not part of it.
+- Reset and transmit-completion are both bounded busy-waits (a fixed
+  poll count, not truly indefinite) on `CR`'s `RST` bit and `TSD0`'s
+  `OWN` bit respectively -- the same polling-not-interrupt-driven
+  approach storage_ata's own PIO loop already uses for an analogous
+  wait, since this scheduler preempts on the timer tick regardless. The
+  bound exists purely as a last-resort guard against a stuck card
+  leaving this driver's single-threaded service loop spinning forever
+  instead of ever answering another client or interrupt again.
 
 ## Protocol
 

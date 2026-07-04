@@ -79,37 +79,41 @@ impl PciDevice {
     }
 }
 
-/// Scans every PCI bus/device/function for the first one matching
-/// `vendor_id`/`device_id`. `None` if no such device is attached.
+/// Scans every device/function on bus 0 for the first one matching
+/// `vendor_id`/`device_id`. `None` if no such device is attached. Bus 0
+/// only, not every possible bus (0-255): this module's own doc comment
+/// already asserts every device this project cares about sits there with
+/// no bridges to recurse through, so scanning further buses would only
+/// cost more boot-time port I/O for a case that can't occur under this
+/// kernel's target chipset.
 pub fn find_device(vendor_id: u16, device_id: u16) -> Option<PciDevice> {
-    for bus in 0..=255u8 {
-        for device in 0..32u8 {
-            let vendor_device0 = read_config_dword(bus, device, 0, 0x00);
-            let vendor0 = (vendor_device0 & 0xFFFF) as u16;
-            if vendor0 == 0xFFFF {
-                continue; // nothing at this bus/device
-            }
-            if vendor0 == vendor_id && (vendor_device0 >> 16) as u16 == device_id {
-                return Some(PciDevice { bus, device, function: 0, vendor_id, device_id });
-            }
+    const BUS: u8 = 0;
+    for device in 0..32u8 {
+        let vendor_device0 = read_config_dword(BUS, device, 0, 0x00);
+        let vendor0 = (vendor_device0 & 0xFFFF) as u16;
+        if vendor0 == 0xFFFF {
+            continue; // nothing at this bus/device
+        }
+        if vendor0 == vendor_id && (vendor_device0 >> 16) as u16 == device_id {
+            return Some(PciDevice { bus: BUS, device, function: 0, vendor_id, device_id });
+        }
 
-            // Bit 7 of the header-type byte (offset 0x0E) marks a
-            // multi-function device -- only then is it worth probing
-            // functions 1-7 too (function 0 is always implicitly probed
-            // above, present or not).
-            let header_type = (read_config_dword(bus, device, 0, 0x0C) >> 16) as u8;
-            if header_type & 0x80 == 0 {
+        // Bit 7 of the header-type byte (offset 0x0E) marks a
+        // multi-function device -- only then is it worth probing
+        // functions 1-7 too (function 0 is always implicitly probed
+        // above, present or not).
+        let header_type = (read_config_dword(BUS, device, 0, 0x0C) >> 16) as u8;
+        if header_type & 0x80 == 0 {
+            continue;
+        }
+        for function in 1..8u8 {
+            let vendor_device = read_config_dword(BUS, device, function, 0x00);
+            let f_vendor = (vendor_device & 0xFFFF) as u16;
+            if f_vendor == 0xFFFF {
                 continue;
             }
-            for function in 1..8u8 {
-                let vendor_device = read_config_dword(bus, device, function, 0x00);
-                let f_vendor = (vendor_device & 0xFFFF) as u16;
-                if f_vendor == 0xFFFF {
-                    continue;
-                }
-                if f_vendor == vendor_id && (vendor_device >> 16) as u16 == device_id {
-                    return Some(PciDevice { bus, device, function, vendor_id, device_id });
-                }
+            if f_vendor == vendor_id && (vendor_device >> 16) as u16 == device_id {
+                return Some(PciDevice { bus: BUS, device, function, vendor_id, device_id });
             }
         }
     }

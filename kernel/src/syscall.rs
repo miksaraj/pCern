@@ -298,6 +298,7 @@ fn sys_mem_alloc(regs: &mut SavedRegs) {
     // (see the root CHANGELOG's Security section) for a different syscall.
     let Some(len) = page_count.checked_mul(mm::frame::FRAME_SIZE) else {
         regs.eax = 0;
+        regs.ecx = 0;
         return;
     };
     let virt_end_ok = virt_addr
@@ -305,6 +306,7 @@ fn sys_mem_alloc(regs: &mut SavedRegs) {
         .is_some_and(|end| end <= mm::paging::KERNEL_VMA);
     if virt_addr % mm::frame::FRAME_SIZE != 0 || !virt_end_ok {
         regs.eax = 0;
+        regs.ecx = 0;
         return;
     }
 
@@ -315,6 +317,7 @@ fn sys_mem_alloc(regs: &mut SavedRegs) {
     };
     let Some(phys) = allocated else {
         regs.eax = 0;
+        regs.ecx = 0;
         return;
     };
 

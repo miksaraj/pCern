@@ -19,7 +19,12 @@
 #    gateway came back.
 #
 # Task ids in this build: nameservice=1, console_server=2, storage_ata=3,
-# fs_fat32=4, net_rtl8139=5, nic_test=6.
+# fs_fat32=4, nic_test=5, net_rtl8139=6 -- nic_test spawns before
+# net_rtl8139 here (unlike production, where net_rtl8139 is optional and
+# must come last so a missing card never shifts another task into its
+# id); this harness's own `.expect()` guarantees the card is present
+# either way, and nic_test doesn't need a fixed id relative to the driver
+# since it looks "net" up by name, retrying until it appears.
 #
 # The interrupt-vector check below additionally allows any vector in
 # 0x20-0x2f (IRQ0-15, this kernel's full remapped PIC range) rather than
@@ -51,10 +56,10 @@ timeout "$BOOT_TIMEOUT" qemu-system-i386 \
 
 FAILED=0
 
-if grep -q "task 6 exited with code 0" "$SERIAL_LOG"; then
-    echo "PASS: nic_test (task 6 exited 0)"
+if grep -q "task 5 exited with code 0" "$SERIAL_LOG"; then
+    echo "PASS: nic_test (task 5 exited 0)"
 else
-    echo "FAIL: nic_test (task 6 did not exit 0)"
+    echo "FAIL: nic_test (task 5 did not exit 0)"
     FAILED=1
 fi
 

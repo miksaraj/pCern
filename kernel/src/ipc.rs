@@ -33,9 +33,14 @@ use crate::task::TaskId;
 pub const KERNEL_TASK_ID: TaskId = 0;
 
 /// Just enough bookkeeping to retire a task's endpoints when it exits (see
-/// `task_exited`) -- nothing reads `owner` otherwise.
+/// `task_exited`), plus which specific IRQ (if any) this endpoint's last
+/// interrupt delivery was for and hasn't been acknowledged by a
+/// subsequent `recv` yet -- see `recv`'s own doc comment for why this is
+/// tracked per-delivery rather than unmasking every IRQ ever registered
+/// to the endpoint on every `recv` call.
 struct EndpointMeta {
     owner: TaskId,
+    pending_irq_ack: Option<u32>,
 }
 
 struct PendingRecv {
@@ -87,7 +92,7 @@ static PENDING_IRQ_EVENTS: Mutex<Vec<PendingIrqEvent>> = Mutex::new(Vec::new());
 pub fn create_endpoint(owner: TaskId) -> EndpointId {
     let mut endpoints = ENDPOINTS.lock();
     let id = endpoints.len();
-    endpoints.push(EndpointMeta { owner });
+    endpoints.push(EndpointMeta { owner, pending_irq_ack: None });
     id
 }
 
@@ -136,13 +141,19 @@ pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], transfer: Opti
 /// same endpoint -- see `notify_interrupt`) is already waiting, otherwise
 /// blocks the caller until one arrives.
 pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
-    // Un-masks any IRQ registered to this endpoint (a no-op for the
-    // ordinary case of an endpoint with none) -- calling `recv` again is
-    // this task's own way of saying "I'm ready for another," including,
-    // for a level-triggered PCI interrupt, having actually cleared the
-    // device's own pending condition first. See `irq::dispatch`'s
-    // masking for why this pairing exists at all.
-    for irq in crate::irq::irqs_for_endpoint(endpoint) {
+    // Un-masks exactly the IRQ this endpoint's *last* interrupt delivery
+    // was for, if any and if it hasn't been acknowledged by a `recv`
+    // already (a no-op for the ordinary case of no pending delivery).
+    // Calling `recv` again is this task's own way of saying "I'm ready
+    // for another," including, for a level-triggered PCI interrupt,
+    // having actually cleared the device's own pending condition first --
+    // see `irq::dispatch`'s masking for why this pairing exists at all.
+    // Tracked per-delivery (not "every IRQ ever registered to this
+    // endpoint") so a hypothetical future endpoint with more than one
+    // IRQ registered on it can't have this `recv` prematurely unmask a
+    // *different*, still-unacknowledged line just because it happens to
+    // share the endpoint.
+    if let Some(irq) = ENDPOINTS.lock().get_mut(endpoint).and_then(|e| e.pending_irq_ack.take()) {
         crate::pic::unmask(irq as u8);
     }
 
@@ -174,6 +185,12 @@ pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
         if let Some(pos) = events.iter().position(|e| e.endpoint == endpoint) {
             let event = events.remove(pos);
             drop(events);
+            // This delivery's own IRQ isn't unmasked until the *next*
+            // recv on this endpoint -- see the unmask at the top of this
+            // function.
+            if let Some(meta) = ENDPOINTS.lock().get_mut(endpoint) {
+                meta.pending_irq_ack = Some(event.irq);
+            }
             unsafe {
                 (*regs).eax = KERNEL_TASK_ID as u32;
                 (*regs).ebx = event.irq;
@@ -206,6 +223,11 @@ pub fn notify_interrupt(endpoint: EndpointId, irq: u32, data: u32) {
     if let Some(pos) = recvs.iter().position(|r| r.endpoint == endpoint) {
         let matched = recvs.remove(pos);
         drop(recvs);
+        // As in recv()'s own PENDING_IRQ_EVENTS branch: this delivery's
+        // IRQ isn't unmasked until the *next* recv on this endpoint.
+        if let Some(meta) = ENDPOINTS.lock().get_mut(endpoint) {
+            meta.pending_irq_ack = Some(irq);
+        }
         unsafe {
             (*matched.regs).eax = KERNEL_TASK_ID as u32;
             (*matched.regs).ebx = irq;

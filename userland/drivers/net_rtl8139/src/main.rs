@@ -29,7 +29,6 @@
 #![no_std]
 #![no_main]
 
-mod port;
 mod rtl8139;
 
 use core::panic::PanicInfo;
@@ -77,7 +76,9 @@ pub extern "C" fn _start() -> ! {
         libpcern::exit(1);
     }
 
-    let mac = rtl8139::init(io_base, rx_buf_phys);
+    let Some(mac) = rtl8139::init(io_base, rx_buf_phys) else {
+        libpcern::exit(1);
+    };
 
     libpcern::register_irq(IRQ_CONTROL_SLOT);
     libpcern::register_name(b"net", MY_INBOX);
@@ -124,8 +125,10 @@ pub extern "C" fn _start() -> ! {
                 if client_reply == 0 {
                     continue;
                 }
-                let w0 = u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]);
-                let w1 = u32::from_le_bytes([mac[4], mac[5], 0, 0]);
+                // pack_name's zero-padded byte packing is exactly what a
+                // 6-byte MAC needs too -- no reason for this reply to
+                // hand-roll the same little-endian word split.
+                let (w0, w1) = libpcern::pack_name(&mac);
                 libpcern::send(client_reply, w0, w1, 0, 0);
             }
             libpcern::NIC_OP_SEND => {

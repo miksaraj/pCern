@@ -15,7 +15,10 @@ Initial release.
 
 - A minimal RTL8139 Fast Ethernet driver: hardware init (reset, receive
   ring setup, RX/TX enable), one frame at a time transmit via a single
-  descriptor, and interrupt-driven receive-ring parsing.
+  descriptor, and interrupt-driven receive-ring parsing. Every hardware
+  handshake this driver polls for (reset completion, transmit-descriptor
+  ownership) is bounded, not an indefinite busy-wait, so a stuck card
+  can't hang the driver's whole service loop forever.
 - Registers as `"net"` and serves raw Ethernet frames in and out over a
   client-supplied shared-memory grant (`NIC_OP_SET_BUFFER`/`SET_REPLY`/
   `GET_MAC`/`SEND`/`RECV` -- see `userland/libpcern`). No ARP, no IP,

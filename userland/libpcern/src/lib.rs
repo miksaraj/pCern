@@ -310,6 +310,49 @@ pub fn nic_recv(nic_slot: u32, my_inbox_slot: u32) -> u32 {
     recv(my_inbox_slot).w0
 }
 
+/// Port I/O helpers, shared by every userland driver that talks to
+/// hardware directly via `in`/`out` (storage_ata, net_rtl8139) instead of
+/// each keeping its own byte-for-byte identical copy. Only usable
+/// because the calling task was spawned with the relevant ports in its
+/// `allowed_ports` -- see `loader::spawn_from_module` in the kernel and
+/// each driver's own spawn call in `main.rs`; using a port outside that
+/// set faults with a `#GP`, not a graceful error return.
+#[inline(always)]
+pub unsafe fn outb(port: u16, value: u8) {
+    core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub unsafe fn outw(port: u16, value: u16) {
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inw(port: u16) -> u16 {
+    let value: u16;
+    core::arch::asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub unsafe fn outl(port: u16, value: u32) {
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub unsafe fn inl(port: u16) -> u32 {
+    let value: u32;
+    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
 /// Console *input* wire protocol (see userland/drivers/console_server). A reader
 /// connects once (`console_connect`) -- handing over a shared page via
 /// `SYS_MEM_ALLOC`/transfer for console_server to place a completed
@@ -611,11 +654,13 @@ pub fn mem_alloc(virt_addr: u32) -> u32 {
 /// Allocates `page_count` fresh, *physically contiguous* pages, maps them
 /// contiguously into the caller's own address space starting at
 /// `virt_addr`, and returns `(grant_slot, phys_base)` (`grant_slot == 0`
-/// on failure, `phys_base` meaningless in that case). Checkpoint W's NIC
-/// driver is the one caller that needs `phys_base`: its hardware DMA
-/// engine reads/writes physical memory directly, bypassing this task's
-/// own page tables entirely, so the driver has to tell it the buffer's
-/// real address rather than the virtual one it maps locally.
+/// and `phys_base == 0` together on failure -- the kernel clears both,
+/// not just the slot, so a caller can't mistake a failed call's leftover
+/// page_count for a real physical address). The NIC driver is the one
+/// caller that needs `phys_base`: its hardware DMA engine reads/writes
+/// physical memory directly, bypassing this task's own page tables
+/// entirely, so the driver has to tell it the buffer's real address
+/// rather than the virtual one it maps locally.
 #[allow(dead_code)]
 pub fn mem_alloc_pages(virt_addr: u32, page_count: u32) -> (u32, u32) {
     let r = unsafe { syscall_raw(SYS_MEM_ALLOC, virt_addr, page_count, 0, 0, 0) };

@@ -74,6 +74,54 @@ support one.
   new feature) to one linear count-and-assert, ahead of adding the sixth
   (`nic_test`).
 
+### Fixed
+
+- `spawn_net_rtl8139` returning early (no card found) consumed no task
+  id, so the production boot's next spawn (`shell`) silently slid into
+  the id nameservice's registration allowlist hardcodes to the name
+  "net" -- letting shell claim that trusted name in the real driver's
+  place on any boot without a physical/emulated RTL8139 attached, which
+  is the common case outside `make test-nic`. Fixed by always spawning
+  the NIC driver *last*, after every task with a guaranteed, deterministic
+  id (`main.rs`'s production and `nic_test` spawn orders both reordered
+  accordingly; `net_rtl8139` now lands at task id 6, not 5): its absence
+  now simply leaves that id unallocated instead of letting anything else
+  take it.
+- `irq::dispatch` masked an IRQ line even when no endpoint was registered
+  for it, but only `ipc::recv`'s per-endpoint unmask could ever unmask it
+  again -- an unregistered line firing even once (a spurious 8259
+  interrupt, or a PCI line firing before its driver's own `register_irq`
+  call has run) was masked permanently instead of the "harmless no-op"
+  this generic dispatch path was meant to be for that case. Masking is
+  now conditioned on a handler actually being registered.
+- `ipc::recv` unmasked *every* IRQ registered to the endpoint being
+  received on, regardless of which one actually fired -- harmless for
+  today's single-IRQ-per-endpoint drivers, but a hypothetical future
+  endpoint with two IRQs registered on it could have one's `recv` call
+  prematurely unmask the other, still-unacknowledged line. Now tracks
+  which specific IRQ each endpoint's last delivery was for and unmasks
+  only that one on the next `recv` -- which also meant `irq::register`
+  needed to start unmasking a freshly-registered line itself (nothing
+  else ever had, once `recv`'s unmask stopped being a blanket "every IRQ
+  this endpoint has ever registered" check), the one-time turn-on a line
+  that's never fired yet still needs before it can fire at all.
+- `sys_mem_alloc`'s failure paths cleared `eax` (the capability slot) but
+  left `ecx` (the physical-base output) holding the caller's own
+  requested page count, which a caller that checked `ecx` before `eax`
+  could mistake for a real physical address. Both registers are now
+  cleared together on every failure path.
+- `gdt::set_io_permissions` reset the *entire* 8193-byte I/O bitmap on
+  every task switch regardless of which task was switching in, a 64x
+  cost increase once the bitmap grew to cover the full port range above
+  (most tasks need only a handful of low ports, if any). Now only resets
+  the union of the previous and current calls' actually-needed byte
+  range, which stays small except for the one switch immediately after a
+  high-port task (like the NIC driver) runs.
+- `pci::find_device` scanned all 256 possible PCI buses even though this
+  module's own design already assumes (and documents) that every device
+  this project cares about sits on bus 0 with no bridges to recurse
+  through. Now scans only bus 0.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added

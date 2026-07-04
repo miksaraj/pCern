@@ -38,13 +38,19 @@ struct GdtPointer {
     base: u32,
 }
 
-/// Ports 0..IO_BITMAP_PORTS get real per-port entries in the TSS I/O
-/// bitmap; ports at or past this fall outside the bitmap's backed region,
-/// which the CPU treats as "1" (blocked) automatically -- the standard
-/// technique for keeping the bitmap far smaller than the architectural
-/// max of 8192 bytes (all 65536 ports) when only a handful of low legacy
-/// ports (keyboard, VGA CRTC) ever need to be reachable from ring 3.
-const IO_BITMAP_PORTS: usize = 1024;
+/// Every port gets a real entry in the TSS I/O bitmap -- the full
+/// architectural max of 8192 bytes (all 65536 ports). Checkpoint D
+/// through Checkpoint I only ever needed a handful of low legacy ports
+/// (keyboard, VGA CRTC, the ATA/IDE bus), so a much smaller backed
+/// region covering just those, with the CPU's automatic "missing byte
+/// reads as all-1s/blocked" behavior handling everything past it, used
+/// to be enough. Checkpoint W's PCI-attached NIC breaks that: its I/O
+/// BAR is assigned by firmware at boot to whatever address the platform
+/// picks, discovered at runtime (see pci.rs) rather than known ahead of
+/// time -- nothing here can assume it lands inside any particular
+/// smaller window. The full bitmap costs a fixed ~8 KiB of `.bss`,
+/// trivial next to this kernel's other static allocations.
+const IO_BITMAP_PORTS: usize = 65536;
 const IO_BITMAP_BYTES: usize = IO_BITMAP_PORTS / 8 + 1; // +1 trailing all-1s byte
 
 /// A 32-bit TSS. This kernel never uses hardware task-switching -- the

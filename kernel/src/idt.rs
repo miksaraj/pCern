@@ -64,6 +64,41 @@ fn set_gate(vector: u8, handler_addr: u32, type_attr: u8) {
     }
 }
 
+/// Checkpoint W: generic stubs for every PIC line besides the timer
+/// (IRQ0) and keyboard (IRQ1), which already have their own dedicated,
+/// device-specific handlers. Unlike those two, a PCI-attached device's
+/// IRQ line (the RTL8139's, for instance) is only known once `pci.rs`
+/// reads it out of the device's config space at boot -- there's no fixed
+/// IRQ number to hardcode a handler function against ahead of time the
+/// way `keyboard::handler` hardcodes IRQ1. Registering all fourteen
+/// unconditionally, always, is simpler than patching the IDT after the
+/// fact once enumeration finds a specific number: an unregistered line
+/// firing (nothing ever calls `irq::register` for it) just costs one
+/// harmless no-op dispatch (`irq::dispatch` finds no endpoint, still
+/// sends the EOI) instead of never being wired up at all.
+macro_rules! define_irq_stub {
+    ($name:ident, $irq:expr) => {
+        extern "x86-interrupt" fn $name(_frame: InterruptStackFrame) {
+            crate::irq::dispatch($irq, 0);
+        }
+    };
+}
+
+define_irq_stub!(irq2, 2);
+define_irq_stub!(irq3, 3);
+define_irq_stub!(irq4, 4);
+define_irq_stub!(irq5, 5);
+define_irq_stub!(irq6, 6);
+define_irq_stub!(irq7, 7);
+define_irq_stub!(irq8, 8);
+define_irq_stub!(irq9, 9);
+define_irq_stub!(irq10, 10);
+define_irq_stub!(irq11, 11);
+define_irq_stub!(irq12, 12);
+define_irq_stub!(irq13, 13);
+define_irq_stub!(irq14, 14);
+define_irq_stub!(irq15, 15);
+
 pub fn init() {
     use crate::exceptions;
     use crate::keyboard;
@@ -79,6 +114,16 @@ pub fn init() {
 
     set_gate(32, timer::handler as *const () as u32, GATE_INTERRUPT_32); // IRQ0, remapped
     set_gate(33, keyboard::handler as *const () as u32, GATE_INTERRUPT_32); // IRQ1, remapped
+
+    // IRQ2-15, remapped: vector = 32 + irq for both PICs (see pic.rs's
+    // PIC1_OFFSET/PIC2_OFFSET -- 32 and 40 respectively, and 40 == 32 + 8
+    // where the slave's lines pick up), so index 0 of this array (IRQ2)
+    // lands at vector 34, matching its position in the loop below.
+    let generic_irqs: [extern "x86-interrupt" fn(InterruptStackFrame); 14] =
+        [irq2, irq3, irq4, irq5, irq6, irq7, irq8, irq9, irq10, irq11, irq12, irq13, irq14, irq15];
+    for (i, handler) in generic_irqs.iter().enumerate() {
+        set_gate(34 + i as u8, *handler as *const () as u32, GATE_INTERRUPT_32);
+    }
 
     set_gate(0x80, syscall::syscall_isr as *const () as u32, GATE_INTERRUPT_32_DPL3);
 

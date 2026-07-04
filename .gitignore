@@ -8,6 +8,7 @@ iso-keytest
 iso-rawtest
 iso-editortest
 iso-reboottest
+iso-nictest
 *.iso
 *.o
 *.elf
@@ -30,6 +31,7 @@ userland/drivers/storage_ata/target
 userland/services/fs_fat32/target
 userland/libpcern/target
 userland/bin/shell/target
+userland/drivers/net_rtl8139/target
 
 # Assembled userland test binaries
 userland/*.bin

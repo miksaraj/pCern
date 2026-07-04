@@ -26,6 +26,10 @@ reasoning behind this split:
     splitting them into separate layers.
   - **storage_ata** -- a polling-only ATA/IDE PIO driver (read and write)
     for the primary bus, registered as `"storage"`.
+  - **net_rtl8139** -- a minimal RTL8139 Fast Ethernet driver, registered
+    as `"net"`, discovered via PCI enumeration at boot. Raw Ethernet
+    frames in and out only -- no ARP, no IP, that's later checkpoints'
+    job.
 - **`userland/services/`** -- ring-3 tasks with *no* hardware capabilities
   of their own, reachable only by name:
   - **nameservice** -- the one piece of discovery every task gets for free
@@ -163,11 +167,18 @@ each one proves.
 marker then calls the new `SYS_REBOOT` syscall -- `run_reboot_test.sh`
 checks the marker reached serial *and* that QEMU, booted with
 `-no-reboot`, exited on its own rather than hanging, since there's no
-exit code to check once the machine actually resets) and
-`make test-disk-boot` (builds the installed FAT32 boot disk via `make
-disk` and boots it headlessly, checking via `run_disk_boot_test.sh` that
-every service's normal startup message reached serial -- proof GRUB
-loaded every multiboot module from the disk itself, not an ISO).
+exit code to check once the machine actually resets), `make test-nic`
+(another standalone `--features nic_test` kernel build; its `nic_test`
+fixture hand-builds a real Ethernet+ARP request frame, sends it through
+`net_rtl8139`, and blocks for QEMU usermode networking's real ARP reply
+to come back through the same driver -- `run_nic_test.sh` checks both
+`nic_test`'s own exit code *and* a real packet capture QEMU wrote to
+disk during the boot, independent of anything `nic_test` itself
+believes), and `make test-disk-boot` (builds the installed FAT32 boot
+disk via `make disk` and boots it headlessly, checking via
+`run_disk_boot_test.sh` that every service's normal startup message
+reached serial -- proof GRUB loaded every multiboot module from the disk
+itself, not an ISO).
 
 ## Releases
 
@@ -198,6 +209,7 @@ run_console_input_test.sh   the keyboard-input test's pass/fail checker
 run_raw_input_test.sh       the raw-input test's pass/fail checker
 run_editor_test.sh          the editor test's pass/fail checker
 run_reboot_test.sh          the reboot-syscall test's pass/fail checker
+run_nic_test.sh             the NIC-driver test's pass/fail checker
 run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
@@ -211,10 +223,12 @@ rust-toolchain.toml         pins the nightly channel for every crate in this rep
 ZephyrLite is a research/learning project, not a production OS. Its storage
 driver and filesystem server only handle a single client at a time, its
 full-screen editor caps a file at 64 KiB and has no scrolling viewport for
-longer content, and there's no networking, no SMP, no persistence beyond
-what's described above. See [CHANGELOG.md](CHANGELOG.md) for OS-level
-release history, and `kernel/CHANGELOG.md`/`userland/<name>/CHANGELOG.md`
-for what's actually been built in each individual crate.
+longer content, and there's no SMP, no persistence beyond what's
+described above. Networking is raw Ethernet frames in and out only (the
+`net_rtl8139` driver) -- no ARP, no IP, no shell command to use it yet.
+See [CHANGELOG.md](CHANGELOG.md) for OS-level release history, and
+`kernel/CHANGELOG.md`/`userland/<name>/CHANGELOG.md` for what's actually
+been built in each individual crate.
 
 ## License
 

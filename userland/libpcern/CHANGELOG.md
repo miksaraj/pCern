@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-07-04
+## [0.5.0] - 2026-07-04
+
+### Added
+
+- `mem_alloc_pages`: allocates multiple physically contiguous pages and
+  returns both the capability slot and the range's physical base address
+  -- the DMA-buffer counterpart to `mem_alloc` (still one page, slot
+  only), which net_rtl8139 needs to hand its hardware a real physical
+  address. `mem_alloc` itself now passes `page_count=1` explicitly rather
+  than relying on the kernel's `0` default, since a caller can now
+  request more.
+- NIC wire protocol: `NIC_OP_SET_BUFFER`/`SET_REPLY`/`GET_MAC`/`SEND`/
+  `RECV` and `nic_connect`/`nic_get_mac`/`nic_send`/`nic_recv`, mirroring
+  storage's/fs's own connect-then-request shape (see
+  userland/drivers/net_rtl8139).
 
 ### Added
 

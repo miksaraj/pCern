@@ -38,6 +38,18 @@ for the full rationale behind keeping these two axes separate.
 
 ## [Unreleased]
 
+### Added
+
+- ZephyrLite has a network card: a minimal RTL8139 Fast Ethernet driver
+  (`net_rtl8139`), discovered automatically via a new PCI enumeration
+  step at boot rather than a fixed hand-wired address the way every
+  earlier driver's hardware is. Raw Ethernet frames in and out only --
+  no ARP, no IP, no shell command to use it yet; that's later
+  checkpoints' job. Verified against *real* traffic (QEMU's usermode
+  network stack replying to a real ARP request, captured on the wire
+  independently of anything the test fixture itself believes), the same
+  "prove it for real" bar every other driver in this project is held to.
+
 ## [26.07-alpha.2] - 2026-07-04
 
 ### Added

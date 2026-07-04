@@ -3,32 +3,29 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
-// Each spawns a different binary at multiboot module index 4
-// (test_harness_spawn expects cap_test_a, keyboard_test_spawn expects
-// console_input_test, raw_input_test_spawn expects raw_input_test,
-// editor_test_spawn expects editor_input_test) against its own dedicated
-// grub config -- building with more than one would have them race for the
-// same module slot with no identity check to catch the mismatch.
-#[cfg(all(feature = "test_harness", feature = "keyboard_test"))]
-compile_error!("test_harness and keyboard_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "test_harness", feature = "raw_input_test"))]
-compile_error!("test_harness and raw_input_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "test_harness", feature = "editor_test"))]
-compile_error!("test_harness and editor_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "keyboard_test", feature = "raw_input_test"))]
-compile_error!("keyboard_test and raw_input_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "keyboard_test", feature = "editor_test"))]
-compile_error!("keyboard_test and editor_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "raw_input_test", feature = "editor_test"))]
-compile_error!("raw_input_test and editor_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "test_harness", feature = "reboot_test"))]
-compile_error!("test_harness and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "keyboard_test", feature = "reboot_test"))]
-compile_error!("keyboard_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "raw_input_test", feature = "reboot_test"))]
-compile_error!("raw_input_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
-#[cfg(all(feature = "editor_test", feature = "reboot_test"))]
-compile_error!("editor_test and reboot_test are mutually exclusive boot configurations; build one or the other, never both");
+// At most one of these mutually exclusive boot-configuration features may
+// be enabled at once -- each spawns a different binary at a fixed
+// multiboot module index (see each `*_test_spawn` function's own doc
+// comment) against its own dedicated grub config; building with more than
+// one would have them race for the same module slot with no identity
+// check to catch the mismatch. A single linear count, not a pairwise
+// `compile_error!` per combination (which grew quadratically every time a
+// new `*_test` feature was added -- ten pairs for five features before
+// Checkpoint W's `nic_test` made it six), catches any two-or-more
+// combination in one check, and adding a seventh feature later only means
+// adding one more term here, not six more blocks.
+const _: () = {
+    let count = cfg!(feature = "test_harness") as u8
+        + cfg!(feature = "keyboard_test") as u8
+        + cfg!(feature = "raw_input_test") as u8
+        + cfg!(feature = "editor_test") as u8
+        + cfg!(feature = "reboot_test") as u8
+        + cfg!(feature = "nic_test") as u8;
+    assert!(
+        count <= 1,
+        "at most one *_test/test_harness feature may be enabled at a time; build one or the other, never several"
+    );
+};
 
 extern crate alloc;
 
@@ -48,6 +45,7 @@ mod keyboard;
 mod loader;
 mod mm;
 mod multiboot;
+mod pci;
 mod pic;
 mod port;
 mod reboot;
@@ -202,25 +200,46 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     let fs_endpoint = ipc::create_endpoint(fs_id);
     grant_endpoint_cap(fs_id, fs_endpoint); // fs_fat32's CSlot 2: its own inbox
 
-    // Checkpoint N: the interactive shell -- purely an IPC client of
-    // console_server/fs_fat32/name-service, no hardware ports or
-    // capabilities of its own beyond the usual CSlot 1/2 convention.
-    // Excluded from the test_harness/keyboard_test/raw_input_test/
-    // editor_test builds: it would be one more concurrent console-input
-    // reader racing that build's own fixture for the "single reader at a
-    // time" role, and would shift every fixture's task id (used
-    // throughout run_tests.sh/console_input_test's own script) in the
-    // test_harness build for no benefit, since nothing there exercises it
-    // anyway.
+    // Checkpoint W: the RTL8139 NIC driver, if PCI enumeration actually
+    // finds one attached (QEMU only emulates one when told to via
+    // `-device rtl8139`) -- module index 4, shifting shell to module
+    // index 5 below. Spawned in the production path only, the same
+    // exclusion list as shell just below: the standalone `nic_test`
+    // harness spawns it separately (nic_test_spawn), at the same task id,
+    // via its own dedicated module list.
     #[cfg(not(any(
         feature = "test_harness",
         feature = "keyboard_test",
         feature = "raw_input_test",
         feature = "editor_test",
-        feature = "reboot_test"
+        feature = "reboot_test",
+        feature = "nic_test"
+    )))]
+    if spawn_net_rtl8139(4).is_none() {
+        println!("[ \x1b[1;33mwarn\x1b[0m ] no RTL8139 NIC found via PCI enumeration -- networking unavailable this boot");
+    }
+
+    // Checkpoint N: the interactive shell -- purely an IPC client of
+    // console_server/fs_fat32/name-service, no hardware ports or
+    // capabilities of its own beyond the usual CSlot 1/2 convention.
+    // Excluded from the test_harness/keyboard_test/raw_input_test/
+    // editor_test/reboot_test/nic_test builds: it would be one more
+    // concurrent console-input reader racing that build's own fixture for
+    // the "single reader at a time" role, and would shift every fixture's
+    // task id (used throughout run_tests.sh/console_input_test's own
+    // script) in the test_harness build for no benefit, since nothing
+    // there exercises it anyway. Module index 5, not 4: see
+    // spawn_net_rtl8139 just above.
+    #[cfg(not(any(
+        feature = "test_harness",
+        feature = "keyboard_test",
+        feature = "raw_input_test",
+        feature = "editor_test",
+        feature = "reboot_test",
+        feature = "nic_test"
     )))]
     {
-        let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
+        let shell_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'shell'");
         println!("[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'shell' (id={})", shell_id);
         let shell_endpoint = ipc::create_endpoint(shell_id);
         grant_endpoint_cap(shell_id, shell_endpoint); // shell's CSlot 2: its own inbox
@@ -237,6 +256,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "editor_test")]
     editor_test_spawn();
+
+    #[cfg(feature = "nic_test")]
+    nic_test_spawn();
 
     #[cfg(feature = "reboot_test")]
     reboot_test_spawn();
@@ -427,6 +449,107 @@ fn reboot_test_spawn() {
     println!(
         "[ \x1b[1;32mok\x1b[0m ] reboot_test: spawned reboot_test (id={})",
         reboot_test_id
+    );
+}
+
+/// Checkpoint W: finds the RTL8139 NIC via PCI enumeration (kernel/src/
+/// pci.rs) -- `None` gracefully if none is attached (QEMU only emulates
+/// one when told to via `-device rtl8139`), the same "hardware not
+/// present" tolerance fs_fat32 already has for "no disk" -- enables it,
+/// and spawns its driver at `module_index` with exactly the capabilities
+/// it needs:
+///
+/// - The discovered I/O-port range via the existing `allowed_ports`
+///   mechanism (no new capability kind needed -- ports are still gated
+///   the same way console_server's/storage_ata's fixed ones are; this
+///   range just isn't known until runtime).
+/// - An `IrqControl` for the discovered PCI interrupt line (CSlot 3),
+///   the same capability kind console_server's fixed IRQ1 uses.
+/// - A read-only `MemoryGrant` (CSlot 4) over a single physical page this
+///   function writes the discovered I/O base into -- the mechanism the
+///   driver needs to *learn* that runtime-discovered value at all, since
+///   (unlike every other hand-wired hardware capability so far) it isn't
+///   a fixed legacy address both sides can just agree on at compile time.
+///   Exposing a value through a capability that already exists for a
+///   different purpose (bulk memory sharing) rather than adding a new
+///   syscall just to pass one integer at spawn time.
+///
+/// Called from the same spot (right after fs_fat32, before whatever
+/// module comes next) in both the production boot and the standalone
+/// `nic_test` harness, so it lands at the same task id -- 5 -- either
+/// way; nameservice's own ALLOWLIST hardcodes that id to the name "net".
+fn spawn_net_rtl8139(module_index: usize) -> Option<task::TaskId> {
+    use alloc::vec::Vec;
+
+    let nic = pci::find_device(0x10EC, 0x8139)?;
+    nic.enable();
+    let io_base = (nic.bar0() & 0xFFFC) as u16;
+    let irq = nic.interrupt_line();
+
+    let allowed_ports: Vec<u16> = (io_base..io_base.saturating_add(256)).collect();
+    let nic_id = loader::spawn_from_module(module_index, &allowed_ports)?;
+    // See the identical assert on console_id earlier in this file --
+    // nameservice's ALLOWLIST hardcodes this task id to "net".
+    assert_eq!(nic_id, 5, "nameservice's ALLOWLIST assumes net_rtl8139 is task id 5");
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] spawned ring-3 task 'net_rtl8139' (id={}, pci={:#06x}:{:#06x}, io_base={:#06x}, irq={})",
+        nic_id, nic.vendor_id, nic.device_id, io_base, irq
+    );
+    let nic_endpoint = ipc::create_endpoint(nic_id);
+    grant_endpoint_cap(nic_id, nic_endpoint); // its CSlot 2: its own inbox
+
+    let irq_control = cap::mint_root(cap::CapKind::IrqControl { irq: irq as u32, endpoint: nic_endpoint });
+    let irq_slot = scheduler::install_cap_for(nic_id, irq_control);
+    debug_assert_eq!(irq_slot, 3, "net_rtl8139's IrqControl must land at CSlot 3");
+
+    // A fresh physical page carrying nothing but the discovered I/O base
+    // (as a little-endian u32 at offset 0) -- see this function's own
+    // doc comment for why a MemoryGrant, not a new capability kind,
+    // carries it across.
+    let info_phys = mm::frame::alloc_frame().expect("out of memory for net_rtl8139's info page");
+    let info_virt = mm::paging::phys_to_virt(info_phys) as *mut u32;
+    unsafe { info_virt.write(io_base as u32) };
+    let info_grant = cap::mint_root(cap::CapKind::MemoryGrant {
+        phys_base: info_phys,
+        len: mm::frame::FRAME_SIZE,
+        writable: false,
+    });
+    let info_slot = scheduler::install_cap_for(nic_id, info_grant);
+    debug_assert_eq!(info_slot, 4, "net_rtl8139's I/O-base info grant must land at CSlot 4");
+
+    // No explicit `pic::unmask(irq)` here: `irq::register` was already
+    // called by the driver's own startup code by the time it first calls
+    // `recv`, and `ipc::recv` unmasks any IRQ registered to the endpoint
+    // it's called on right then -- see its own doc comment for why that's
+    // the right moment, not "as soon as this function hands out the
+    // capability," to first let this line through.
+    Some(nic_id)
+}
+
+/// Spawns `nic_test` (see `userland/cap_test`), Checkpoint W's regression
+/// fixture for the RTL8139 driver, only present in a kernel built with
+/// `--features nic_test` (see `make test-nic`) -- `grub-nictest.cfg` is
+/// the one grub config whose module list matches the indices below.
+/// Unlike every other `*_test_spawn` here, this one still needs the full
+/// nameservice/console_server/storage_ata/fs_fat32 stack the shared code
+/// above always spawns (module indices 0-3 in every build): `.expect`s
+/// (not the graceful `None` tolerance production boot uses) that PCI
+/// enumeration actually finds an RTL8139, since this harness's whole
+/// point is exercising it, then spawns `nic_test` itself with no
+/// hand-wired capabilities beyond the usual CSlot 1/2 convention -- it
+/// reaches the driver by looking up "net" through the name service, the
+/// same way any other client would.
+#[cfg(feature = "nic_test")]
+fn nic_test_spawn() {
+    spawn_net_rtl8139(4).expect("nic_test requires -device rtl8139 in this boot's QEMU invocation");
+
+    let nic_test_id = loader::spawn_from_module(5, &[]).expect("no multiboot module 5 found for 'nic_test'");
+    let nic_test_endpoint = ipc::create_endpoint(nic_test_id);
+    grant_endpoint_cap(nic_test_id, nic_test_endpoint); // its CSlot 2: its own inbox
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] nic_test: spawned nic_test (id={})",
+        nic_test_id
     );
 }
 

@@ -35,6 +35,11 @@ FS_FAT32_TARGET := i686-pcern-user
 FS_FAT32_ELF := $(FS_FAT32_DIR)/target/$(FS_FAT32_TARGET)/$(PROFILE)/fs_fat32
 FS_FAT32_BIN := $(USERLAND_DIR)/fs_fat32.bin
 
+NET_RTL8139_DIR := $(USERLAND_DIR)/drivers/net_rtl8139
+NET_RTL8139_TARGET := i686-pcern-user
+NET_RTL8139_ELF := $(NET_RTL8139_DIR)/target/$(NET_RTL8139_TARGET)/$(PROFILE)/net_rtl8139
+NET_RTL8139_BIN := $(USERLAND_DIR)/net_rtl8139.bin
+
 SHELL_DIR := $(USERLAND_DIR)/bin/shell
 SHELL_TARGET := i686-pcern-user
 SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
@@ -45,7 +50,7 @@ SHELL_BIN := $(USERLAND_DIR)/shell.bin
 # a future service only needs adding here once, not as two separately
 # hand-kept copies (this list, and `disk`'s below) that could silently
 # drift apart.
-PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
+PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(NET_RTL8139_BIN) $(SHELL_BIN)
 # `disk`'s own copy of the same list, paired (`path:8.3-name`) with the
 # uppercase short name each binary lands under on the FAT32 boot disk --
 # unlike `iso`'s ISO9660+Rock Ridge (which tolerates the binaries'
@@ -54,7 +59,7 @@ PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN
 # classic 8.3 short names. Kept as one paired list, not two separate
 # parallel ones, so there's no way for the two to fall out of sync with
 # each other by reordering.
-PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(SHELL_BIN):SHELL.BIN
+PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(NET_RTL8139_BIN):RTL8139.BIN $(SHELL_BIN):SHELL.BIN
 
 CP := cp
 RM := rm -rf
@@ -116,6 +121,18 @@ BOOT_REBOOTTEST_PATH := $(ISO_REBOOTTEST_PATH)/boot
 GRUB_REBOOTTEST_PATH := $(BOOT_REBOOTTEST_PATH)/grub
 ISO_REBOOTTEST := pcern-reboottest-i386.iso
 
+# Checkpoint W's RTL8139 NIC-driver test harness: its own standalone
+# kernel build (--features nic_test) + grub config + ISO, same reason as
+# the other *_test harnesses above -- see run_nic_test.sh's doc comment.
+# Unlike them, this one still needs net_rtl8139 itself present (built by
+# `userland` like every other default service), since that's the thing
+# actually being tested.
+CFG_NICTEST := $(KERNEL_DIR)/grub-nictest.cfg
+ISO_NICTEST_PATH := iso-nictest
+BOOT_NICTEST_PATH := $(ISO_NICTEST_PATH)/boot
+GRUB_NICTEST_PATH := $(BOOT_NICTEST_PATH)/grub
+ISO_NICTEST := pcern-nictest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -158,7 +175,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN)
+userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(NET_RTL8139_BIN) $(SHELL_BIN)
 
 $(CONSOLE_SERVER_BIN): FORCE
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)
@@ -175,6 +192,10 @@ $(STORAGE_ATA_BIN): FORCE
 $(FS_FAT32_BIN): FORCE
 	cd $(FS_FAT32_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(FS_FAT32_ELF) $(FS_FAT32_BIN)
+
+$(NET_RTL8139_BIN): FORCE
+	cd $(NET_RTL8139_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(NET_RTL8139_ELF) $(NET_RTL8139_BIN)
 
 $(SHELL_BIN): FORCE
 	cd $(SHELL_DIR) && $(CARGO) build --$(PROFILE)
@@ -208,6 +229,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/loaded_program $(USERLAND_DIR)/loaded_program.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/reboot_test $(USERLAND_DIR)/reboot_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/nic_test $(USERLAND_DIR)/nic_test.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -322,6 +345,28 @@ iso-reboottest: kernel-reboottest userland cap_test
 test-reboot: iso-reboottest
 	./run_reboot_test.sh $(ISO_REBOOTTEST)
 
+.PHONY: kernel-nictest
+kernel-nictest:
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features nic_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-nictest
+iso-nictest: kernel-nictest userland cap_test
+	$(MKDIR) $(GRUB_NICTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_NICTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_NICTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_NICTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_NICTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_NICTEST_PATH)/fs_fat32.bin
+	$(CP) $(NET_RTL8139_BIN) $(BOOT_NICTEST_PATH)/net_rtl8139.bin
+	$(CP) $(USERLAND_DIR)/nic_test.bin $(BOOT_NICTEST_PATH)/nic_test.bin
+	$(CP) $(CFG_NICTEST) $(GRUB_NICTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_NICTEST) $(ISO_NICTEST_PATH)
+
+.PHONY: test-nic
+test-nic: iso-nictest
+	./run_nic_test.sh $(ISO_NICTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
@@ -329,6 +374,7 @@ test: iso-test test-fat32-image
 	$(MAKE) test-raw-input
 	$(MAKE) test-editor
 	$(MAKE) test-reboot
+	$(MAKE) test-nic
 	$(MAKE) test-disk-boot
 
 .PHONY: test-fat32-image
@@ -405,6 +451,7 @@ clean:
 	cd $(NAMESERVICE_DIR) && $(CARGO) clean
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
+	cd $(NET_RTL8139_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(ISO_NICTEST_PATH) $(ISO_NICTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)

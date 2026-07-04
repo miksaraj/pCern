@@ -20,7 +20,59 @@ historical context.
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-04
+## [0.6.0] - 2026-07-04
+
+Checkpoint W: a PCI-enumerated NIC driver, and everything the kernel
+needed to grow to support one.
+
+### Added
+
+- A minimal PCI configuration-space enumerator (`pci.rs`): brute-force
+  bus/device/function scanning via legacy port I/O (0xCF8/0xCFC), reading
+  a matched device's BAR0, interrupt line, and enabling it (I/O space +
+  bus master). 32-bit port I/O (`inl`/`outl`) added to `port.rs` to
+  support it -- everything before this was byte-wide.
+- Generic IRQ2-15 dispatch (`idt.rs`/`irq.rs`): unlike the timer's/
+  keyboard's fixed IRQ0/IRQ1 handlers, a PCI device's interrupt line is
+  only known once enumeration reads it out of the device's own config
+  space at boot, so there's no fixed number to hardcode a handler
+  against ahead of time. All fourteen remaining lines get a generic stub
+  registered unconditionally; an unregistered line firing costs one
+  harmless no-op dispatch.
+- `pic::mask`/`pic::unmask`, and a fix for a real interrupt storm this
+  surfaced during Checkpoint W's own bring-up: a PCI interrupt is
+  level-triggered, not edge-triggered like the keyboard's, so sending EOI
+  alone (this kernel's only pattern until now) let the still-asserted
+  line re-trigger the instant `iret` re-enabled interrupts -- faster than
+  any task could ever be scheduled to actually clear the device's own
+  condition, exhausting the kernel heap in an infinite loop. `irq::dispatch`
+  now masks the line before EOI; `ipc::recv` unmasks it again once the
+  registered task is back and ready for another, tying the mask/unmask
+  lifecycle directly to the driver's own service loop with no new
+  syscall needed.
+- The TSS I/O permission bitmap (`gdt.rs`) now covers the full 65536-port
+  architectural range instead of the first 1024: a PCI device's I/O-BAR
+  is assigned by firmware at boot to whatever address the platform
+  picks (QEMU's default chipset lands the RTL8139 around 0xC000), not a
+  fixed low legacy address the old, smaller bitmap window was sized
+  around.
+- `mm::frame::alloc_frames_contiguous`/`free_frames_contiguous`: a linear
+  scan for a run of physically contiguous free frames, needed for a
+  DMA-capable device's ring buffer (the RTL8139's receive ring), which a
+  device's own DMA engine requires but which this allocator's original
+  single-frame-at-a-time `alloc_frame` can't guarantee.
+- `SYS_MEM_ALLOC` now accepts a page count (`ecx`, `0` treated as `1` for
+  every existing caller) and additionally returns the allocated range's
+  physical base address (`ecx` on output) -- needed by a DMA-capable
+  driver to tell its hardware where its buffers actually are, since the
+  device operates on physical memory directly with no notion of the
+  calling task's own page tables. Exposing it isn't a new privilege
+  boundary: a caller already holding the resulting `MemoryGrant` can
+  already read and write every byte that address names.
+- Simplified the `*_test`/`test_harness` mutual-exclusion check from ten
+  pairwise `compile_error!` blocks (which grew quadratically with every
+  new feature) to one linear count-and-assert, ahead of adding the sixth
+  (`nic_test`).
 
 ### Added
 

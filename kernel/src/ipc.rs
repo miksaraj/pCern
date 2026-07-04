@@ -136,6 +136,16 @@ pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], transfer: Opti
 /// same endpoint -- see `notify_interrupt`) is already waiting, otherwise
 /// blocks the caller until one arrives.
 pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
+    // Un-masks any IRQ registered to this endpoint (a no-op for the
+    // ordinary case of an endpoint with none) -- calling `recv` again is
+    // this task's own way of saying "I'm ready for another," including,
+    // for a level-triggered PCI interrupt, having actually cleared the
+    // device's own pending condition first. See `irq::dispatch`'s
+    // masking for why this pairing exists at all.
+    for irq in crate::irq::irqs_for_endpoint(endpoint) {
+        crate::pic::unmask(irq as u8);
+    }
+
     {
         let mut sends = PENDING_SENDS.lock();
         if let Some(pos) = sends.iter().position(|s| s.endpoint == endpoint) {

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-04
+
+### Added
+
+- `nic_test`: proves the RTL8139 driver's raw Ethernet frame in/out path
+  against *real* traffic, not a simulation -- hand-builds a complete
+  Ethernet+ARP request frame, sends it via `NIC_OP_SEND`, and blocks on
+  `NIC_OP_RECV` expecting QEMU usermode networking's real ARP reply from
+  its virtual gateway to come back through the same driver. Its own
+  standalone `nic_test` kernel build/boot config (`make test-nic`), same
+  reasoning as every other standalone harness here; unlike them, still
+  needs net_rtl8139 itself present, since that's the thing being tested.
+  `run_nic_test.sh` separately verifies the same round trip against a
+  real packet capture QEMU wrote to disk, independent of anything this
+  fixture itself believes.
+
 ## [0.4.0] - 2026-07-04
 
 ### Added

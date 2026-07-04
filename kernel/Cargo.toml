@@ -1,6 +1,6 @@
 [package]
 name = "pcern"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 
 [[bin]]
@@ -43,6 +43,14 @@ editor_test = []
 # tear down any other fixture running alongside it. See `make test-reboot`
 # and src/main.rs's reboot_test_spawn.
 reboot_test = []
+# Spawns only nic_test (see userland/cap_test), Checkpoint W's regression
+# fixture for the RTL8139 NIC driver -- its own standalone boot
+# configuration (grub-nictest.cfg), same reasoning as the other *_test
+# features above. Unlike them, it still needs net_rtl8139 present (module
+# index 4, right after fs_fat32, exactly where the production boot spawns
+# it too) since that's the thing actually being tested -- see
+# `make test-nic` and src/main.rs's nic_test_spawn.
+nic_test = []
 
 [profile.dev]
 panic = "abort"

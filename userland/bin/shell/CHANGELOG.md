@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-05
+
+### Fixed
+
+- The shell refused to start at all when `fs_fat32` hadn't registered
+  `"fs"` with the name service -- which is the normal, documented outcome
+  of booting with no FAT32 disk attached (e.g. `make run`'s plain
+  `-cdrom`-only QEMU invocation, or a downloaded release ISO booted the
+  same way), not a failure of anything. `read`/`edit`/`run <file>` do
+  need `fs_fat32` and stay unavailable in that case, but `help` and the
+  prompt itself don't, so hard-exiting on a missing `"fs"` made the
+  entire shell inaccessible for no reason. The shell now starts
+  regardless, prints a one-line notice that `fs`-dependent commands are
+  unavailable, and only `read`/`edit`/`run` themselves report "no
+  filesystem available" if actually invoked. (Issue #20)
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

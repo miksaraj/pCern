@@ -40,6 +40,11 @@ NET_RTL8139_TARGET := i686-pcern-user
 NET_RTL8139_ELF := $(NET_RTL8139_DIR)/target/$(NET_RTL8139_TARGET)/$(PROFILE)/net_rtl8139
 NET_RTL8139_BIN := $(USERLAND_DIR)/net_rtl8139.bin
 
+NETSTACK_DIR := $(USERLAND_DIR)/services/netstack
+NETSTACK_TARGET := i686-pcern-user
+NETSTACK_ELF := $(NETSTACK_DIR)/target/$(NETSTACK_TARGET)/$(PROFILE)/netstack
+NETSTACK_BIN := $(USERLAND_DIR)/netstack.bin
+
 SHELL_DIR := $(USERLAND_DIR)/bin/shell
 SHELL_TARGET := i686-pcern-user
 SHELL_ELF := $(SHELL_DIR)/target/$(SHELL_TARGET)/$(PROFILE)/shell
@@ -50,7 +55,7 @@ SHELL_BIN := $(USERLAND_DIR)/shell.bin
 # a future service only needs adding here once, not as two separately
 # hand-kept copies (this list, and `disk`'s below) that could silently
 # drift apart.
-PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(NET_RTL8139_BIN) $(SHELL_BIN)
+PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(SHELL_BIN) $(NET_RTL8139_BIN) $(NETSTACK_BIN)
 # `disk`'s own copy of the same list, paired (`path:8.3-name`) with the
 # uppercase short name each binary lands under on the FAT32 boot disk --
 # unlike `iso`'s ISO9660+Rock Ridge (which tolerates the binaries'
@@ -59,7 +64,7 @@ PROD_USERLAND_BINS := $(NAMESERVICE_BIN) $(CONSOLE_SERVER_BIN) $(STORAGE_ATA_BIN
 # classic 8.3 short names. Kept as one paired list, not two separate
 # parallel ones, so there's no way for the two to fall out of sync with
 # each other by reordering.
-PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(NET_RTL8139_BIN):RTL8139.BIN $(SHELL_BIN):SHELL.BIN
+PROD_USERLAND_DISK_FILES := $(NAMESERVICE_BIN):NAMESERV.BIN $(CONSOLE_SERVER_BIN):CONSOLE.BIN $(STORAGE_ATA_BIN):STORAGE.BIN $(FS_FAT32_BIN):FS_FAT32.BIN $(SHELL_BIN):SHELL.BIN $(NET_RTL8139_BIN):RTL8139.BIN $(NETSTACK_BIN):NETSTACK.BIN
 
 CP := cp
 RM := rm -rf
@@ -133,6 +138,19 @@ BOOT_NICTEST_PATH := $(ISO_NICTEST_PATH)/boot
 GRUB_NICTEST_PATH := $(BOOT_NICTEST_PATH)/grub
 ISO_NICTEST := pcern-nictest-i386.iso
 
+# Checkpoint X's ARP/IPv4/ICMP responder test harness: its own standalone
+# kernel build (--features arp_icmp_test) + grub config + ISO, same
+# reason as the other *_test harnesses above -- see
+# run_arp_icmp_test.sh's doc comment. Needs both net_rtl8139 and
+# netstack present (built by `userland` like every other default
+# service), since netstack -- the thing actually being tested -- is only
+# reachable through it.
+CFG_ARPTEST := $(KERNEL_DIR)/grub-arptest.cfg
+ISO_ARPTEST_PATH := iso-arptest
+BOOT_ARPTEST_PATH := $(ISO_ARPTEST_PATH)/boot
+GRUB_ARPTEST_PATH := $(BOOT_ARPTEST_PATH)/grub
+ISO_ARPTEST := pcern-arptest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -175,7 +193,7 @@ kernel:
 	grub-file --is-x86-multiboot $(KERNEL_BIN)
 
 .PHONY: userland
-userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(NET_RTL8139_BIN) $(SHELL_BIN)
+userland: $(CONSOLE_SERVER_BIN) $(NAMESERVICE_BIN) $(STORAGE_ATA_BIN) $(FS_FAT32_BIN) $(NET_RTL8139_BIN) $(NETSTACK_BIN) $(SHELL_BIN)
 
 $(CONSOLE_SERVER_BIN): FORCE
 	cd $(CONSOLE_SERVER_DIR) && $(CARGO) build --$(PROFILE)
@@ -196,6 +214,10 @@ $(FS_FAT32_BIN): FORCE
 $(NET_RTL8139_BIN): FORCE
 	cd $(NET_RTL8139_DIR) && $(CARGO) build --$(PROFILE)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(NET_RTL8139_ELF) $(NET_RTL8139_BIN)
+
+$(NETSTACK_BIN): FORCE
+	cd $(NETSTACK_DIR) && $(CARGO) build --$(PROFILE)
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents $(NETSTACK_ELF) $(NETSTACK_BIN)
 
 $(SHELL_BIN): FORCE
 	cd $(SHELL_DIR) && $(CARGO) build --$(PROFILE)
@@ -367,6 +389,28 @@ iso-nictest: kernel-nictest userland cap_test
 test-nic: iso-nictest
 	./run_nic_test.sh $(ISO_NICTEST)
 
+.PHONY: kernel-arptest
+kernel-arptest:
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features arp_icmp_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-arptest
+iso-arptest: kernel-arptest userland
+	$(MKDIR) $(GRUB_ARPTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_ARPTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_ARPTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_ARPTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_ARPTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_ARPTEST_PATH)/fs_fat32.bin
+	$(CP) $(NET_RTL8139_BIN) $(BOOT_ARPTEST_PATH)/net_rtl8139.bin
+	$(CP) $(NETSTACK_BIN) $(BOOT_ARPTEST_PATH)/netstack.bin
+	$(CP) $(CFG_ARPTEST) $(GRUB_ARPTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_ARPTEST) $(ISO_ARPTEST_PATH)
+
+.PHONY: test-arp
+test-arp: iso-arptest
+	./run_arp_icmp_test.sh $(ISO_ARPTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
@@ -375,6 +419,7 @@ test: iso-test test-fat32-image
 	$(MAKE) test-editor
 	$(MAKE) test-reboot
 	$(MAKE) test-nic
+	$(MAKE) test-arp
 	$(MAKE) test-disk-boot
 
 .PHONY: test-fat32-image
@@ -452,6 +497,7 @@ clean:
 	cd $(STORAGE_ATA_DIR) && $(CARGO) clean
 	cd $(FS_FAT32_DIR) && $(CARGO) clean
 	cd $(NET_RTL8139_DIR) && $(CARGO) clean
+	cd $(NETSTACK_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(ISO_NICTEST_PATH) $(ISO_NICTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(ISO_NICTEST_PATH) $(ISO_NICTEST) $(ISO_ARPTEST_PATH) $(ISO_ARPTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)

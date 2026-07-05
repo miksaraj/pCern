@@ -1,6 +1,6 @@
 [package]
 name = "pcern"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 
 [[bin]]
@@ -47,10 +47,18 @@ reboot_test = []
 # fixture for the RTL8139 NIC driver -- its own standalone boot
 # configuration (grub-nictest.cfg), same reasoning as the other *_test
 # features above. Unlike them, it still needs net_rtl8139 present (module
-# index 4, right after fs_fat32, exactly where the production boot spawns
-# it too) since that's the thing actually being tested -- see
-# `make test-nic` and src/main.rs's nic_test_spawn.
+# index 5, spawned right after nic_test itself) since that's the thing
+# actually being tested -- see `make test-nic` and src/main.rs's
+# nic_test_spawn.
 nic_test = []
+# Spawns net_rtl8139 and netstack (see userland/services/netstack)
+# alongside the normal service set, with no other fixture -- its own
+# standalone boot configuration (grub-arptest.cfg). Unlike nic_test,
+# verification is entirely external (a real peer on the wire sends ARP
+# and ICMP echo requests and checks netstack's real replies), since
+# netstack never exits the way a test fixture would -- see
+# `make test-arp` and src/main.rs's arp_icmp_test_spawn.
+arp_icmp_test = []
 
 [profile.dev]
 panic = "abort"

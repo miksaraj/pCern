@@ -1,10 +1,10 @@
 [package]
-name = "net_rtl8139"
-version = "0.1.1"
+name = "netstack"
+version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "net_rtl8139"
+name = "netstack"
 path = "src/main.rs"
 
 [dependencies]

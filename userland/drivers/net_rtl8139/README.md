@@ -39,9 +39,13 @@ syscall) just to pass one integer at spawn time.
 
 ## Design
 
-- One transmit descriptor of the four the hardware has, and one frame in
-  flight at a time -- no attempt to pipeline a second send before the
-  first completes.
+- One frame in flight at a time -- no attempt to pipeline a second send
+  before the first completes -- but rotating through all four transmit
+  descriptors the hardware has, in order, not reusing descriptor 0 for
+  every send: both real RTL8139 hardware and QEMU's emulation of it
+  track an internal "next expected descriptor" pointer that advances
+  after each completion, and rewriting the one just used instead of the
+  next one in sequence is simply never picked up.
 - Receive is interrupt-driven, but only the *most recently received*
   frame is ever held for a client to claim, not a queue: if a second
   frame arrives before `NIC_OP_RECV` claims the first, the first is
@@ -60,8 +64,8 @@ syscall) just to pass one integer at spawn time.
   8192-byte figure is ever used as the wrap boundary; the allocation
   padding is not part of it.
 - Reset and transmit-completion are both bounded busy-waits (a fixed
-  poll count, not truly indefinite) on `CR`'s `RST` bit and `TSD0`'s
-  `OWN` bit respectively -- the same polling-not-interrupt-driven
+  poll count, not truly indefinite) on `CR`'s `RST` bit and the active
+  descriptor's `OWN` bit respectively -- the same polling-not-interrupt-driven
   approach storage_ata's own PIO loop already uses for an analogous
   wait, since this scheduler preempts on the timer tick regardless. The
   bound exists purely as a last-resort guard against a stuck card
@@ -90,8 +94,8 @@ A client connects once, then issues any number of requests:
    its length placed in the shared buffer and returned as `w0`.
 
 See `userland/libpcern`'s `nic_connect`/`nic_get_mac`/`nic_send`/
-`nic_recv` for the client-side helpers (`cap_test`'s `nic_test` is the
-one consumer so far).
+`nic_recv` for the client-side helpers -- `cap_test`'s `nic_test` and
+`userland/services/netstack` are this protocol's two clients so far.
 
 **Only one client at a time is supported**, the same scope-narrowing
 precedent as every other driver in this project.

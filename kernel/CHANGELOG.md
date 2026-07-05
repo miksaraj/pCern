@@ -20,6 +20,29 @@ historical context.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-05
+
+### Added
+
+- Spawns `netstack` (see `userland/services/netstack`) right after
+  `net_rtl8139`, and only when it was actually found -- both in
+  production boot and in a new standalone `arp_icmp_test` boot
+  configuration (`grub-arptest.cfg`, see `make test-arp`). No new
+  capabilities or syscalls needed: netstack reaches `net_rtl8139` the
+  same way any other client would, by looking up `"net"` through the
+  name service, so main.rs's own role is unchanged from spawning
+  `shell` -- an inbox and nothing else.
+
+### Fixed
+
+- Shell's spawn block wasn't excluded from the new `arp_icmp_test`
+  feature's `#[cfg(not(any(...)))]` list, so building with that feature
+  would have spawned shell's code under module index 4 -- which, in
+  that boot configuration, is actually `net_rtl8139`'s own binary --
+  running with none of the capabilities `net_rtl8139` expects. Caught
+  before this ever shipped in a build anyone would run; added to the
+  exclusion list alongside every other standalone test harness.
+
 ## [0.6.0] - 2026-07-04
 
 A PCI-enumerated NIC driver, and everything the kernel needed to grow to

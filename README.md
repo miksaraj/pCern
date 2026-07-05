@@ -28,8 +28,8 @@ reasoning behind this split:
     for the primary bus, registered as `"storage"`.
   - **net_rtl8139** -- a minimal RTL8139 Fast Ethernet driver, registered
     as `"net"`, discovered via PCI enumeration at boot. Raw Ethernet
-    frames in and out only -- no ARP, no IP, that's later checkpoints'
-    job.
+    frames in and out only -- no ARP, no IP of its own; that's
+    `netstack`'s job, built on top of it.
 - **`userland/services/`** -- ring-3 tasks with *no* hardware capabilities
   of their own, reachable only by name:
   - **nameservice** -- the one piece of discovery every task gets for free
@@ -39,6 +39,11 @@ reasoning behind this split:
   - **fs_fat32** -- a FAT32 filesystem server (read and write), registered
     as `"fs"`, that reads/writes sectors through `storage_ata` and serves
     files to its own clients.
+  - **netstack** -- claims a static IP, answers ARP requests for it, and
+    replies to ICMP echo (ping) requests, all by being `net_rtl8139`'s
+    client over ordinary IPC the same way `fs_fat32` is `storage_ata`'s.
+    No hardware capabilities of its own, and only spawned when a real
+    RTL8139 NIC was actually found at boot.
 - **`userland/bin/`** -- user-facing programs:
   - **shell** -- a minimal interactive shell: reads a line via
     `console_server`'s input protocol, then dispatches `read <file>`/
@@ -174,7 +179,15 @@ fixture hand-builds a real Ethernet+ARP request frame, sends it through
 to come back through the same driver -- `run_nic_test.sh` checks both
 `nic_test`'s own exit code *and* a real packet capture QEMU wrote to
 disk during the boot, independent of anything `nic_test` itself
-believes), and `make test-disk-boot` (builds the installed FAT32 boot
+believes), `make test-arp` (another standalone `--features arp_icmp_test`
+kernel build; boots `netstack` on top of `net_rtl8139` and, from outside
+the VM entirely, sends a real ARP request and a real ICMP echo request
+at it over QEMU's `-netdev socket` raw-Ethernet backend -- `run_arp_icmp_test.sh`
+checks the ARP and ICMP echo replies it gets back, with their checksums
+independently recomputed, against both what its own peer script saw
+*and* what an independent pcap capture recorded, the same
+don't-trust-a-single-witness pattern `run_nic_test.sh` established), and
+`make test-disk-boot` (builds the installed FAT32 boot
 disk via `make disk` and boots it headlessly, checking via
 `run_disk_boot_test.sh` that every service's normal startup message
 reached serial -- proof GRUB loaded every multiboot module from the disk
@@ -210,6 +223,7 @@ run_raw_input_test.sh       the raw-input test's pass/fail checker
 run_editor_test.sh          the editor test's pass/fail checker
 run_reboot_test.sh          the reboot-syscall test's pass/fail checker
 run_nic_test.sh             the NIC-driver test's pass/fail checker
+run_arp_icmp_test.sh        the ARP/ICMP responder test's pass/fail checker
 run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
@@ -224,8 +238,9 @@ ZephyrLite is a research/learning project, not a production OS. Its storage
 driver and filesystem server only handle a single client at a time, its
 full-screen editor caps a file at 64 KiB and has no scrolling viewport for
 longer content, and there's no SMP, no persistence beyond what's
-described above. Networking is raw Ethernet frames in and out only (the
-`net_rtl8139` driver) -- no ARP, no IP, no shell command to use it yet.
+described above. Networking answers ARP and ICMP echo (ping) on one
+hardcoded static IP (`netstack`, on top of the `net_rtl8139` driver) --
+no DHCP, no TCP/UDP, no shell command to use it yet.
 See [CHANGELOG.md](CHANGELOG.md) for OS-level release history, and
 `kernel/CHANGELOG.md`/`userland/<name>/CHANGELOG.md` for what's actually
 been built in each individual crate.

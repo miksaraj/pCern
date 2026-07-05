@@ -44,11 +44,22 @@ for the full rationale behind keeping these two axes separate.
   (`net_rtl8139`), discovered automatically via a new PCI enumeration
   step at boot rather than a fixed hand-wired address the way every
   earlier driver's hardware is. Raw Ethernet frames in and out only --
-  no ARP, no IP, no shell command to use it yet; that's later
-  checkpoints' job. Verified against *real* traffic (QEMU's usermode
-  network stack replying to a real ARP request, captured on the wire
-  independently of anything the test fixture itself believes), the same
-  "prove it for real" bar every other driver in this project is held to.
+  no ARP, no IP of its own; that's the next bullet's job. Verified
+  against *real* traffic (QEMU's usermode network stack replying to a
+  real ARP request, captured on the wire independently of anything the
+  test fixture itself believes), the same "prove it for real" bar every
+  other driver in this project is held to.
+- ZephyrLite answers on the network: a new `netstack` service claims a
+  hardcoded static IP, replies to ARP requests for it, and replies to
+  ICMP echo (ping) requests addressed to it, built entirely as
+  `net_rtl8139`'s client over ordinary IPC (no new hardware capabilities,
+  no kernel changes to the networking logic itself). No DHCP, no TCP/UDP,
+  no shell command to use it yet -- later work. Verified against *real*
+  traffic from outside the VM -- a real ARP request and a
+  real ICMP echo request sent over QEMU's `-netdev socket` raw-Ethernet
+  backend, with the replies checked against an independent packet
+  capture as well as the test script's own reading of them, the same
+  "prove it for real" bar `net_rtl8139` itself was held to.
 
 ## [26.07-alpha.2] - 2026-07-04
 

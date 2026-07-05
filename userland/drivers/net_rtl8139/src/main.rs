@@ -86,6 +86,7 @@ pub extern "C" fn _start() -> ! {
     let mut cur_rx: u16 = 0;
     let mut last_rx = [0u8; rtl8139::MAX_FRAME_SIZE];
     let mut last_rx_len: usize = 0;
+    let mut tx_desc: u8 = 0;
 
     let mut client_buf_mapped = false;
     let mut client_reply: u32 = 0;
@@ -140,7 +141,7 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
                 let len = (r.w1 as usize).min(rtl8139::MAX_FRAME_SIZE);
-                let ok = rtl8139::send(io_base, TX_BUF_VIRT as usize, tx_buf_phys, &client_buf()[..len]);
+                let ok = rtl8139::send(io_base, TX_BUF_VIRT as usize, tx_buf_phys, &client_buf()[..len], &mut tx_desc);
                 libpcern::send(client_reply, if ok { 1 } else { 0 }, 0, 0, 0);
             }
             libpcern::NIC_OP_RECV => {

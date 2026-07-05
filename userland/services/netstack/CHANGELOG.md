@@ -17,4 +17,6 @@ Initial release.
   answers ARP requests for it, and replies to ICMP echo requests
   (ping) addressed to it, over raw Ethernet frames served by
   `net_rtl8139`. No outbound connections, no DHCP, no ARP cache, no IP
-  forwarding.
+  forwarding. Both reply paths zero-pad a reply shorter than the
+  60-byte Ethernet minimum before sending it, without ever indexing
+  past the bytes actually received to do so.

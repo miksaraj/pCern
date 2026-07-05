@@ -54,8 +54,8 @@ for the full rationale behind keeping these two axes separate.
   ICMP echo (ping) requests addressed to it, built entirely as
   `net_rtl8139`'s client over ordinary IPC (no new hardware capabilities,
   no kernel changes to the networking logic itself). No DHCP, no TCP/UDP,
-  no shell command to use it yet; that's later checkpoints' job. Verified
-  against *real* traffic from outside the VM -- a real ARP request and a
+  no shell command to use it yet -- later work. Verified against *real*
+  traffic from outside the VM -- a real ARP request and a
   real ICMP echo request sent over QEMU's `-netdev socket` raw-Ethernet
   backend, with the replies checked against an independent packet
   capture as well as the test script's own reading of them, the same

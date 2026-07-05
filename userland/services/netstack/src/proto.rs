@@ -64,31 +64,51 @@ fn checksum16(data: &[u8]) -> u16 {
 /// Inspects `buf[..len]` (a frame `net_rtl8139` just delivered) and, if
 /// it's an ARP request or ICMP echo request addressed to `my_ip`,
 /// rewrites it *in place* into the corresponding reply and returns the
-/// reply's own length. `buf`'s capacity beyond `len` may still hold
-/// bytes from a previous call -- callers must only ever transmit exactly
-/// the returned length, never `buf.len()` itself.
+/// reply's own length. `buf` itself is never truncated to `len`: a reply
+/// shorter than `MIN_FRAME_LEN` is zero-padded into the bytes just past
+/// the received frame, which requires write access to `buf`'s full
+/// capacity, not just the `len` bytes that were actually received --
+/// truncating `buf` to `len` up front (an earlier version of this
+/// function did exactly that) made that padding step index past the end
+/// of the resulting slice and panic on any request shorter than
+/// `MIN_FRAME_LEN`. Every read of `buf` below is still bounds-checked
+/// against `len`, never against `buf.len()`, so bytes past `len` (old
+/// data from a previous frame) are never treated as this request's own.
 pub fn handle_frame(buf: &mut [u8], len: usize, my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> {
-    let buf = &mut buf[..len];
-    if buf.len() < ETH_HEADER_LEN {
+    if len < ETH_HEADER_LEN || len > buf.len() {
         return None;
     }
     let ethertype = [buf[12], buf[13]];
     if ethertype == ETHERTYPE_ARP {
-        handle_arp(buf, my_mac, my_ip)
+        handle_arp(buf, len, my_mac, my_ip)
     } else if ethertype == ETHERTYPE_IPV4 {
-        handle_icmp_echo(buf, my_mac, my_ip)
+        handle_icmp_echo(buf, len, my_mac, my_ip)
     } else {
         None
     }
 }
 
-/// If `buf` is an ARP request asking for `my_ip`, rewrites it in place
-/// into the matching reply (swapping every sender/target field) and
-/// returns its length -- always the same as the request's own, since an
-/// ARP reply carries exactly the same fields as a request.
-fn handle_arp(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> {
+/// Zero-pads `buf[reply_len..]` up to `MIN_FRAME_LEN` if `reply_len` is
+/// short of it, returning whichever length was actually sent. Requires
+/// `buf.len() >= MIN_FRAME_LEN`, always true here since `handle_frame`
+/// never truncates `buf` down to the received frame's own length.
+fn pad_to_min_frame(buf: &mut [u8], reply_len: usize) -> usize {
+    if reply_len < MIN_FRAME_LEN {
+        buf[reply_len..MIN_FRAME_LEN].fill(0);
+        MIN_FRAME_LEN
+    } else {
+        reply_len
+    }
+}
+
+/// If `buf[..len]` is an ARP request asking for `my_ip`, rewrites it in
+/// place into the matching reply (swapping every sender/target field)
+/// and returns its length, zero-padded up to `MIN_FRAME_LEN` if the
+/// request arrived shorter than that (an ARP reply is otherwise always
+/// exactly as long as the request that prompted it).
+fn handle_arp(buf: &mut [u8], len: usize, my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> {
     const ARP: usize = ETH_HEADER_LEN;
-    if buf.len() < ARP + ARP_LEN {
+    if len < ARP + ARP_LEN {
         return None;
     }
     if buf[ARP..ARP + 2] != ARP_HTYPE_ETHERNET || buf[ARP + 2..ARP + 4] != ARP_PTYPE_IPV4 {
@@ -117,10 +137,10 @@ fn handle_arp(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> 
     buf[ARP + 18..ARP + 24].copy_from_slice(&sender_mac); // THA
     buf[ARP + 24..ARP + 28].copy_from_slice(&sender_ip); // TPA
 
-    Some(buf.len())
+    Some(pad_to_min_frame(buf, ARP + ARP_LEN))
 }
 
-/// If `buf` is an ICMP echo request addressed to `my_ip` (a plain
+/// If `buf[..len]` is an ICMP echo request addressed to `my_ip` (a plain
 /// 20-byte IPv4 header, no options, protocol ICMP), rewrites it in place
 /// into the matching echo reply -- identifier, sequence, and payload
 /// bytes are left completely untouched, since a ping reply must echo
@@ -128,9 +148,9 @@ fn handle_arp(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> 
 /// (ICMP's own, then IPv4's, after the address swap) change. Returns the
 /// reply's length, zero-padded up to `MIN_FRAME_LEN` if the echoed
 /// payload was short enough to need it.
-fn handle_icmp_echo(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> {
+fn handle_icmp_echo(buf: &mut [u8], len: usize, my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<usize> {
     const IP: usize = ETH_HEADER_LEN;
-    if buf.len() < IP + IPV4_HEADER_LEN {
+    if len < IP + IPV4_HEADER_LEN {
         return None;
     }
     if buf[IP] != IPV4_VER_IHL_NO_OPTIONS {
@@ -144,7 +164,7 @@ fn handle_icmp_echo(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<u
     }
 
     let total_len = u16::from_be_bytes([buf[IP + 2], buf[IP + 3]]) as usize;
-    if total_len < IPV4_HEADER_LEN || IP + total_len > buf.len() {
+    if total_len < IPV4_HEADER_LEN || IP + total_len > len {
         return None; // malformed/truncated length field
     }
 
@@ -184,11 +204,5 @@ fn handle_icmp_echo(buf: &mut [u8], my_mac: [u8; 6], my_ip: [u8; 4]) -> Option<u
     buf[0..6].copy_from_slice(&sender_mac);
     buf[6..12].copy_from_slice(&my_mac);
 
-    let reply_len = IP + total_len;
-    if reply_len < MIN_FRAME_LEN {
-        buf[reply_len..MIN_FRAME_LEN].fill(0);
-        Some(MIN_FRAME_LEN)
-    } else {
-        Some(reply_len)
-    }
+    Some(pad_to_min_frame(buf, IP + total_len))
 }

@@ -160,7 +160,7 @@ pub fn send(io_base: u16, tx_buf_virt: usize, tx_buf_phys: u32, frame: &[u8], tx
     if frame.is_empty() || frame.len() > MAX_FRAME_SIZE {
         return false;
     }
-    let idx = (*tx_desc % 4) as usize;
+    let idx = *tx_desc as usize; // always < 4: the only write to *tx_desc, below, keeps it that way
     *tx_desc = (*tx_desc + 1) % 4;
     unsafe {
         let dst = core::slice::from_raw_parts_mut(tx_buf_virt as *mut u8, frame.len());

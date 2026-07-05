@@ -4,8 +4,8 @@ A minimal ARP + IPv4 + ICMP responder. Claims a static IP address and
 answers ARP requests and ICMP echo requests (ping) for it, over raw
 Ethernet frames served by `net_rtl8139`. No outbound connections, no
 DHCP, no ARP cache, no IP forwarding, no fragmentation, no IPv4 options
--- the first checkpoint where ZephyrLite is observable as "a host with an
-IP address" from anywhere else on the wire, not just from inside its own
+-- the first point where ZephyrLite is observable as "a host with an IP
+address" from anywhere else on the wire, not just from inside its own
 boot log.
 
 ## Capabilities it needs
@@ -21,9 +21,9 @@ hardware, no ports, no IRQ.
 The static IP (`10.0.2.15`, matching the conventional guest address
 QEMU's own usermode networking assumes) is a hardcoded constant in
 `main.rs` -- there's no DHCP client, no configuration file, no way to
-change it short of rebuilding. That's deliberately out of scope for this
-checkpoint, whose whole point is proving the ARP/ICMP responder path
-works at all against real traffic; address configuration is later work.
+change it short of rebuilding. That's deliberately out of scope here,
+where the whole point is proving the ARP/ICMP responder path works at
+all against real traffic; address configuration is later work.
 
 ## Design
 
@@ -44,8 +44,8 @@ works at all against real traffic; address configuration is later work.
   kernel-mediated delivery rather than re-checking it at every layer.
 - IPv4 packets with any header length other than the plain 20-byte
   minimum (i.e. any options present) are silently ignored, matching
-  every other checkpoint's "narrow the scope, don't half-implement the
-  general case" precedent.
+  every other driver/service in this project's "narrow the scope, don't
+  half-implement the general case" precedent.
 - Only one client (this task) of `net_rtl8139` at a time -- the same
   scope every driver in this project already has.
 
@@ -54,7 +54,7 @@ works at all against real traffic; address configuration is later work.
 No outbound ARP resolution (nothing to resolve -- replies just mirror
 whatever MAC/IP a request already named), no ARP cache, no IP
 forwarding/routing, no fragmentation or reassembly, no UDP or TCP, no
-shell command to use any of this yet. All later checkpoints' job.
+shell command to use any of this yet -- all later work.
 
 ## Testing
 

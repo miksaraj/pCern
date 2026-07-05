@@ -302,7 +302,7 @@ iso-keytest: kernel-keytest userland cap_test
 
 .PHONY: test-keyboard
 test-keyboard: iso-keytest
-	./run_console_input_test.sh $(ISO_KEYTEST)
+	./scripts/test/run_console_input_test.sh $(ISO_KEYTEST)
 
 .PHONY: kernel-rawtest
 kernel-rawtest:
@@ -323,7 +323,7 @@ iso-rawtest: kernel-rawtest userland cap_test
 
 .PHONY: test-raw-input
 test-raw-input: iso-rawtest
-	./run_raw_input_test.sh $(ISO_RAWTEST)
+	./scripts/test/run_raw_input_test.sh $(ISO_RAWTEST)
 
 .PHONY: kernel-editortest
 kernel-editortest:
@@ -344,7 +344,7 @@ iso-editortest: kernel-editortest userland cap_test
 
 .PHONY: test-editor
 test-editor: iso-editortest test-fat32-image
-	./run_editor_test.sh $(ISO_EDITORTEST) $(TEST_FAT32_IMG)
+	./scripts/test/run_editor_test.sh $(ISO_EDITORTEST) $(TEST_FAT32_IMG)
 
 .PHONY: kernel-reboottest
 kernel-reboottest:
@@ -365,7 +365,7 @@ iso-reboottest: kernel-reboottest userland cap_test
 
 .PHONY: test-reboot
 test-reboot: iso-reboottest
-	./run_reboot_test.sh $(ISO_REBOOTTEST)
+	./scripts/test/run_reboot_test.sh $(ISO_REBOOTTEST)
 
 .PHONY: kernel-nictest
 kernel-nictest:
@@ -387,7 +387,7 @@ iso-nictest: kernel-nictest userland cap_test
 
 .PHONY: test-nic
 test-nic: iso-nictest
-	./run_nic_test.sh $(ISO_NICTEST)
+	./scripts/test/run_nic_test.sh $(ISO_NICTEST)
 
 .PHONY: kernel-arptest
 kernel-arptest:
@@ -409,11 +409,11 @@ iso-arptest: kernel-arptest userland
 
 .PHONY: test-arp
 test-arp: iso-arptest
-	./run_arp_icmp_test.sh $(ISO_ARPTEST)
+	./scripts/test/run_arp_icmp_test.sh $(ISO_ARPTEST)
 
 .PHONY: test
 test: iso-test test-fat32-image
-	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
+	./scripts/test/run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
 	$(MAKE) test-keyboard
 	$(MAKE) test-raw-input
 	$(MAKE) test-editor
@@ -487,7 +487,7 @@ run-disk: disk
 
 .PHONY: test-disk-boot
 test-disk-boot: disk
-	./run_disk_boot_test.sh $(DISK_IMG)
+	./scripts/test/run_disk_boot_test.sh $(DISK_IMG)
 
 .PHONY: clean
 clean:

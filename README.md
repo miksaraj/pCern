@@ -148,7 +148,7 @@ every fixture in `userland/cap_test`, assembles a separate ISO
 boots it headlessly in QEMU against a freshly generated FAT32 test image
 (`make test-fat32-image`, built from the small tracked files in
 `testdata/`), and checks that every fixture's task exited with code 0 and
-that no unexpected interrupt vectors fired. See `run_tests.sh` for exactly
+that no unexpected interrupt vectors fired. See `scripts/test/run_tests.sh` for exactly
 what's checked, and `userland/cap_test/README.md` for what each fixture
 proves.
 
@@ -162,34 +162,34 @@ pull request against `main`.
 (`console_input_test`, `raw_input_test`, `editor_input_test`) in its own
 isolated QEMU invocation with a monitor socket, driving it with *real*
 PS/2 keystrokes via QEMU's monitor `sendkey` command rather than a
-synthetic in-process byte -- see `run_console_input_test.sh`/
-`run_raw_input_test.sh`/`run_editor_test.sh` and
+synthetic in-process byte -- see `scripts/test/run_console_input_test.sh`/
+`scripts/test/run_raw_input_test.sh`/`scripts/test/run_editor_test.sh` and
 `userland/cap_test/README.md` for how synchronization works and what
 each one proves.
 
 `make test` also runs `make test-reboot` (another standalone
 `--features reboot_test` kernel build; its `reboot_test` fixture prints a
-marker then calls the new `SYS_REBOOT` syscall -- `run_reboot_test.sh`
+marker then calls the new `SYS_REBOOT` syscall -- `scripts/test/run_reboot_test.sh`
 checks the marker reached serial *and* that QEMU, booted with
 `-no-reboot`, exited on its own rather than hanging, since there's no
 exit code to check once the machine actually resets), `make test-nic`
 (another standalone `--features nic_test` kernel build; its `nic_test`
 fixture hand-builds a real Ethernet+ARP request frame, sends it through
 `net_rtl8139`, and blocks for QEMU usermode networking's real ARP reply
-to come back through the same driver -- `run_nic_test.sh` checks both
+to come back through the same driver -- `scripts/test/run_nic_test.sh` checks both
 `nic_test`'s own exit code *and* a real packet capture QEMU wrote to
 disk during the boot, independent of anything `nic_test` itself
 believes), `make test-arp` (another standalone `--features arp_icmp_test`
 kernel build; boots `netstack` on top of `net_rtl8139` and, from outside
 the VM entirely, sends a real ARP request and a real ICMP echo request
-at it over QEMU's `-netdev socket` raw-Ethernet backend -- `run_arp_icmp_test.sh`
+at it over QEMU's `-netdev socket` raw-Ethernet backend -- `scripts/test/run_arp_icmp_test.sh`
 checks the ARP and ICMP echo replies it gets back, with their checksums
 independently recomputed, against both what its own peer script saw
 *and* what an independent pcap capture recorded, the same
-don't-trust-a-single-witness pattern `run_nic_test.sh` established), and
+don't-trust-a-single-witness pattern `scripts/test/run_nic_test.sh` established), and
 `make test-disk-boot` (builds the installed FAT32 boot
 disk via `make disk` and boots it headlessly, checking via
-`run_disk_boot_test.sh` that every service's normal startup message
+`scripts/test/run_disk_boot_test.sh` that every service's normal startup message
 reached serial -- proof GRUB loaded every multiboot module from the disk
 itself, not an ISO).
 
@@ -217,14 +217,15 @@ userland/
   libpcern/                 shared no_std syscall/protocol bindings
   cap_test/                 regression fixtures (see Testing above)
 testdata/                   small fixed input files for the FAT32 test image
-run_tests.sh                the test harness's pass/fail checker
-run_console_input_test.sh   the keyboard-input test's pass/fail checker
-run_raw_input_test.sh       the raw-input test's pass/fail checker
-run_editor_test.sh          the editor test's pass/fail checker
-run_reboot_test.sh          the reboot-syscall test's pass/fail checker
-run_nic_test.sh             the NIC-driver test's pass/fail checker
-run_arp_icmp_test.sh        the ARP/ICMP responder test's pass/fail checker
-run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
+scripts/test/
+  run_tests.sh                the test harness's pass/fail checker
+  run_console_input_test.sh   the keyboard-input test's pass/fail checker
+  run_raw_input_test.sh       the raw-input test's pass/fail checker
+  run_editor_test.sh          the editor test's pass/fail checker
+  run_reboot_test.sh          the reboot-syscall test's pass/fail checker
+  run_nic_test.sh             the NIC-driver test's pass/fail checker
+  run_arp_icmp_test.sh        the ARP/ICMP responder test's pass/fail checker
+  run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
 CHANGELOG.md                ZephyrLite (OS-level) release history

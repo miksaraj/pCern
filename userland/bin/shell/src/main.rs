@@ -68,7 +68,12 @@ fn print_help(console_slot: u32) {
 /// Prints a file's contents a sector at a time -- same read loop
 /// fs_client_test already exercises, just against whatever name the user
 /// typed instead of a fixed one.
-fn cmd_read(console_slot: u32, fs_slot: u32, name: &[u8]) {
+fn cmd_read(console_slot: u32, fs_slot: Option<u32>, name: &[u8]) {
+    let Some(fs_slot) = fs_slot else {
+        print(console_slot, b"read: no filesystem available\n");
+        return;
+    };
+
     let size = match libpcern::fs_open(fs_slot, MY_INBOX, name) {
         Some(s) => s,
         None => {
@@ -92,7 +97,12 @@ fn cmd_read(console_slot: u32, fs_slot: u32, name: &[u8]) {
 
 /// Loads a file (capped at one page, see the module doc comment) into
 /// `RUN_BUF_VIRT` and spawns it via `SYS_SPAWN_FROM_MEMORY`.
-fn cmd_run(console_slot: u32, fs_slot: u32, run_grant: u32, name: &[u8]) {
+fn cmd_run(console_slot: u32, fs_slot: Option<u32>, run_grant: u32, name: &[u8]) {
+    let Some(fs_slot) = fs_slot else {
+        print(console_slot, b"run: no filesystem available\n");
+        return;
+    };
+
     let size = match libpcern::fs_open(fs_slot, MY_INBOX, name) {
         Some(s) => s,
         None => {
@@ -142,14 +152,14 @@ pub extern "C" fn _start() -> ! {
 
     // fs_fat32 needs several IPC round trips of its own (connecting to
     // storage_ata, reading the BPB) before it registers "fs" -- retry
-    // rather than treating a too-early lookup as failure.
-    let fs_slot = match libpcern::lookup_name_retry(b"fs", MY_INBOX, 1000) {
-        Some(s) => s,
-        None => {
-            print(console_slot, b"shell: FAIL (no fs)\n");
-            libpcern::exit(1);
-        }
-    };
+    // rather than treating a too-early lookup as failure. Unlike
+    // `console`'s lookup above, a missing "fs" isn't fatal: fs_fat32
+    // deliberately never registers "fs" when no FAT32 volume is attached
+    // (see its README), which is the normal case for the plain `make
+    // run`/`-cdrom`-only boot path -- so `read`/`edit`/`run` just stay
+    // unavailable rather than the whole shell refusing to start (see
+    // issue #20).
+    let fs_slot = libpcern::lookup_name_retry(b"fs", MY_INBOX, 1000);
 
     let fs_grant = libpcern::mem_alloc(FS_BUF_VIRT);
     let console_grant = libpcern::mem_alloc(CONSOLE_BUF_VIRT);
@@ -159,7 +169,9 @@ pub extern "C" fn _start() -> ! {
         libpcern::exit(1);
     }
 
-    libpcern::fs_connect(fs_slot, fs_grant, MY_INBOX);
+    if let Some(fs_slot) = fs_slot {
+        libpcern::fs_connect(fs_slot, fs_grant, MY_INBOX);
+    }
 
     // Own dedicated endpoint for console line-ready notifications -- see
     // the module doc comment for why this can't be MY_INBOX.
@@ -173,7 +185,11 @@ pub extern "C" fn _start() -> ! {
     // per invocation would leak its 64 KiB every time `edit` is typed.
     let mut editor = Editor::new(EDITOR_BUF_VIRT);
 
-    print(console_slot, b"pCern shell -- type 'help' for commands\n> ");
+    print(console_slot, b"pCern shell -- type 'help' for commands\n");
+    if fs_slot.is_none() {
+        print(console_slot, b"shell: no fs (read/edit/run unavailable)\n");
+    }
+    print(console_slot, b"> ");
 
     loop {
         let len = libpcern::console_read_line(console_slot, reader_slot) as usize;
@@ -184,9 +200,12 @@ pub extern "C" fn _start() -> ! {
             b"help" => print_help(console_slot),
             b"read" => cmd_read(console_slot, fs_slot, argument),
             b"run" => cmd_run(console_slot, fs_slot, run_grant, argument),
-            b"edit" => match &mut editor {
-                Some(ed) => editor::run(console_slot, reader_slot, MY_INBOX, fs_slot, FS_BUF_VIRT, ed, argument),
-                None => print(console_slot, b"edit: unavailable (alloc failed at startup)\n"),
+            b"edit" => match (&mut editor, fs_slot) {
+                (Some(ed), Some(fs_slot)) => {
+                    editor::run(console_slot, reader_slot, MY_INBOX, fs_slot, FS_BUF_VIRT, ed, argument)
+                }
+                (None, _) => print(console_slot, b"edit: unavailable (alloc failed at startup)\n"),
+                (_, None) => print(console_slot, b"edit: no filesystem available\n"),
             },
             b"" => {}
             _ => {

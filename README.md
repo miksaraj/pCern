@@ -206,6 +206,58 @@ scheme), not any single crate's own SemVer -- the kernel and every
 userland crate keep versioning themselves independently in their own
 `Cargo.toml`/`CHANGELOG.md`.
 
+## Running a downloaded release
+
+A release only ships `zephyrlite-<tag>-i386.iso` -- the kernel and every
+default userland service, nothing else. You don't need this repository
+cloned or any of the [Prerequisites](#prerequisites) above to run it, just
+`qemu-system-i386` itself:
+
+```sh
+qemu-system-i386 -cdrom zephyrlite-<tag>-i386.iso -serial stdio
+```
+
+boots straight to the shell. Without a filesystem attached, that's a
+genuinely empty boot -- `fs_fat32` has no FAT32 volume to read, and by
+design never registers itself as `"fs"` when that's the case (see
+[userland/services/fs_fat32/README.md](userland/services/fs_fat32/README.md))
+-- so `read`/`edit`/`run` all say a filesystem isn't available; only
+`help` does anything.
+
+To get a real filesystem `fs_fat32` can serve, create a small FAT32 disk
+image on the host and attach it as a second IDE drive alongside the CD:
+
+```sh
+# 1. Create a 64 MiB FAT32 image (needs dosfstools' mkfs.vfat --
+#    `sudo apt-get install dosfstools` on Debian/Ubuntu; mtools' `mformat`
+#    is a drop-in substitute if you have that instead: `truncate -s 64M
+#    pcern-disk.img && mformat -i pcern-disk.img -F -v PCERNFS ::`).
+mkfs.vfat -F 32 -n PCERNFS -C pcern-disk.img 65536
+
+# 2. Boot the ISO with that image attached as the primary IDE drive.
+#    -boot d matters here: with a second drive present, QEMU's default
+#    boot order would otherwise try it (it has no bootloader on it)
+#    before the CD.
+qemu-system-i386 \
+    -cdrom zephyrlite-<tag>-i386.iso \
+    -boot d \
+    -drive file=pcern-disk.img,if=ide,index=0,format=raw \
+    -serial stdio
+```
+
+`pcern-disk.img` starts out empty -- `edit <name>` inside the shell can
+still create a brand-new file on it from nothing -- but to put existing
+files on it first, from the host before booting, use mtools' `mcopy`
+against the same image (e.g. `mcopy -i pcern-disk.img hello.txt
+::HELLO.TXT`); `fs_fat32` only understands plain 8.3 filenames (no long
+names), the same limit `mcopy` itself falls back to.
+
+This is the same one-file, one-drive shape `make disk`/`make run-disk`
+build for repo development (see [Building and running](#building-and-running)
+above), minus the GRUB-embedded boot code those need and this doesn't --
+the CD is still what actually boots here; this image is pure data,
+read and written through the exact same protocol either way.
+
 ## Repository layout
 
 ```

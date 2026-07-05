@@ -61,6 +61,16 @@ for the full rationale behind keeping these two axes separate.
   capture as well as the test script's own reading of them, the same
   "prove it for real" bar `net_rtl8139` itself was held to.
 
+### Fixed
+
+- The shell hard-exited with `shell: FAIL (no fs)` and never showed a
+  prompt at all when booted without a FAT32 disk attached -- the normal
+  outcome of the plain `-cdrom`-only QEMU invocation `make run` and every
+  released ISO document, since `fs_fat32` by design never registers
+  `"fs"` with no volume to serve. The shell now always starts; only
+  `read`/`edit`/`run` (the commands that actually need a filesystem)
+  report it's unavailable. (Issue #20)
+
 ## [26.07-alpha.2] - 2026-07-04
 
 ### Added

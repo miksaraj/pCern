@@ -40,6 +40,15 @@ historical context.
   order as production, so `netstack`'s new "tcp" name registration
   lands at the id nameservice's ALLOWLIST expects.
 
+### Fixed
+
+- `i686-pcern.json`'s `rustc-abi` field renamed from `"x86-softfloat"`
+  to `"softfloat"` -- an unpinned nightly toolchain (this project floats
+  on whatever `nightly` currently resolves to, see `rust-toolchain.toml`)
+  stopped accepting the old, architecture-prefixed spelling. Confirmed
+  the new spelling still builds correctly on the previously-pinned
+  nightly too, so this is a pure rename, not a behavior change.
+
 ## [0.7.0] - 2026-07-05
 
 ### Added

@@ -60,6 +60,21 @@ for the full rationale behind keeping these two axes separate.
   backend, with the replies checked against an independent packet
   capture as well as the test script's own reading of them, the same
   "prove it for real" bar `net_rtl8139` itself was held to.
+- ZephyrLite can now open a TCP connection: `netstack` gained a minimal
+  TCP client (connect/send/recv/close), exposed to other tasks as a new
+  `"tcp"` protocol -- a fixed advertised window and no congestion
+  control or retransmission, enough transport to carry a small HTTP-
+  shaped request/response exchange, not a general-purpose sliding-window
+  implementation. Needed one new kernel primitive (`SYS_TRY_RECV`, a
+  non-blocking receive) so `netstack` can poll both `net_rtl8139` and an
+  external client's requests without ever risking a deadlock from
+  leaving a request outstanding with the driver while it waits on the
+  other. Verified against a real three-way handshake, a real
+  HTTP-shaped exchange, and a real close handshake with an independent
+  peer on the wire (a hand-built passive-open TCP responder), plus the
+  in-guest fixture's own exit code and an independent packet capture --
+  the same "prove it for real" bar every earlier networking milestone
+  here was held to.
 
 ## [26.07-alpha.2] - 2026-07-04
 

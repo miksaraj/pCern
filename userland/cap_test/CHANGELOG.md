@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-09
+
+### Added
+
+- `http_client_test`: proves netstack's minimal TCP client (connect/
+  send/recv/close) against *real* traffic -- opens a TCP connection via
+  netstack's new `"tcp"` protocol, sends a fixed HTTP-shaped request,
+  reads the response back (possibly across more than one `TCP_OP_RECV`
+  call), closes the connection, and checks the exact response bytes.
+  Its own standalone `tcp_test` kernel build/boot config (`make
+  test-tcp`), needing net_rtl8139 and netstack present alongside it,
+  same reasoning as `nic_test`'s own harness. `run_tcp_test.sh`
+  separately verifies the same exchange against a real peer on the wire
+  (a hand-built passive-open TCP responder in Python) and an independent
+  packet capture, independent of anything this fixture itself believes.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added

@@ -97,6 +97,18 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   editor_test`, `grub-editortest.cfg`, `make test-editor`) -- needs the
   shared FAT32 test image attached, unlike `console_input_test`/
   `raw_input_test`, since it exercises real `fs_fat32` writes.
+- **`http_client_test`** -- exercises `netstack`'s TCP client protocol
+  end to end: looks up `"tcp"`, opens a connection, sends a fixed
+  HTTP-shaped request, reads the response back (looping `TCP_OP_RECV`
+  until the peer closes, since it may arrive across more than one
+  reply), closes the connection, and checks the response bytes exactly.
+  Its own standalone build (`--features tcp_test`, `grub-tcptest.cfg`,
+  `make test-tcp`) -- needs `net_rtl8139` and `netstack` present
+  alongside it, the same reasoning as `nic_test`'s own harness.
+  `run_tcp_test.sh` drives the other side of the connection with a
+  hand-built passive-open TCP responder (real ARP, a real three-way
+  handshake, a real close) and separately re-checks the exchange via an
+  independent packet capture.
 
 ## Adding a new fixture
 

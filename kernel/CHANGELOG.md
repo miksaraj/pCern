@@ -20,6 +20,26 @@ historical context.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-09
+
+### Added
+
+- `SYS_TRY_RECV` (syscall 15): like `SYS_RECV`, but returns immediately
+  with a `NO_MESSAGE` sentinel instead of blocking when nothing is
+  available for the given endpoint. This kernel's IPC has no `select` --
+  a blocking `recv` can only ever watch one endpoint -- and `netstack`'s
+  new TCP client is the first task that genuinely needs
+  to poll two independent event sources (its own inbox's ARP/ICMP
+  traffic, and an external client's TCP requests) without risking a
+  deadlock from leaving a request outstanding with `net_rtl8139` while
+  it waits on the other. See `ipc::try_recv`'s own doc comment for the
+  full reasoning, including the specific deadlock this avoids.
+- Spawns `http_client_test` (see `userland/cap_test`), `net_rtl8139`,
+  and `netstack` in a new standalone `tcp_test` boot configuration
+  (`grub-tcptest.cfg`, see `make test-tcp`) -- the same relative spawn
+  order as production, so `netstack`'s new "tcp" name registration
+  lands at the id nameservice's ALLOWLIST expects.
+
 ## [0.7.0] - 2026-07-05
 
 ### Added

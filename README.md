@@ -42,8 +42,10 @@ reasoning behind this split:
   - **netstack** -- claims a static IP, answers ARP requests for it, and
     replies to ICMP echo (ping) requests, all by being `net_rtl8139`'s
     client over ordinary IPC the same way `fs_fat32` is `storage_ata`'s.
-    No hardware capabilities of its own, and only spawned when a real
-    RTL8139 NIC was actually found at boot.
+    Also serves a minimal TCP client (connect/send/recv/close, a fixed
+    window, no congestion control) to other tasks as a new `"tcp"`
+    protocol. No hardware capabilities of its own, and only spawned when
+    a real RTL8139 NIC was actually found at boot.
 - **`userland/bin/`** -- user-facing programs:
   - **shell** -- a minimal interactive shell: reads a line via
     `console_server`'s input protocol, then dispatches `read <file>`/
@@ -186,7 +188,15 @@ at it over QEMU's `-netdev socket` raw-Ethernet backend -- `run_arp_icmp_test.sh
 checks the ARP and ICMP echo replies it gets back, with their checksums
 independently recomputed, against both what its own peer script saw
 *and* what an independent pcap capture recorded, the same
-don't-trust-a-single-witness pattern `run_nic_test.sh` established), and
+don't-trust-a-single-witness pattern `run_nic_test.sh` established),
+`make test-tcp` (another standalone `--features tcp_test` kernel build;
+its `http_client_test` fixture opens a real TCP connection through
+netstack's new client protocol, sends a fixed HTTP-shaped request, and
+checks the response bytes -- `run_tcp_test.sh` drives the other side of
+that connection with a hand-built passive-open TCP responder (real ARP,
+a real three-way handshake, a real close) and separately re-checks the
+exchange via an independent packet capture, the same pattern every other
+driver/service test here uses), and
 `make test-disk-boot` (builds the installed FAT32 boot
 disk via `make disk` and boots it headlessly, checking via
 `run_disk_boot_test.sh` that every service's normal startup message
@@ -224,6 +234,7 @@ run_editor_test.sh          the editor test's pass/fail checker
 run_reboot_test.sh          the reboot-syscall test's pass/fail checker
 run_nic_test.sh             the NIC-driver test's pass/fail checker
 run_arp_icmp_test.sh        the ARP/ICMP responder test's pass/fail checker
+run_tcp_test.sh             the TCP client test's pass/fail checker
 run_disk_boot_test.sh       the installed-disk-boot test's pass/fail checker
 Makefile                    build orchestration -- see it for every target
 CLAUDE.md                   development process and design history
@@ -239,8 +250,10 @@ driver and filesystem server only handle a single client at a time, its
 full-screen editor caps a file at 64 KiB and has no scrolling viewport for
 longer content, and there's no SMP, no persistence beyond what's
 described above. Networking answers ARP and ICMP echo (ping) on one
-hardcoded static IP (`netstack`, on top of the `net_rtl8139` driver) --
-no DHCP, no TCP/UDP, no shell command to use it yet.
+hardcoded static IP and can open a minimal outbound TCP connection
+(`netstack`, on top of the `net_rtl8139` driver) -- no DHCP, no UDP, no
+retransmission or congestion control, no shell command to use any of it
+yet.
 See [CHANGELOG.md](CHANGELOG.md) for OS-level release history, and
 `kernel/CHANGELOG.md`/`userland/<name>/CHANGELOG.md` for what's actually
 been built in each individual crate.

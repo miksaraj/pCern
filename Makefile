@@ -151,6 +151,18 @@ BOOT_ARPTEST_PATH := $(ISO_ARPTEST_PATH)/boot
 GRUB_ARPTEST_PATH := $(BOOT_ARPTEST_PATH)/grub
 ISO_ARPTEST := pcern-arptest-i386.iso
 
+# Checkpoint Y's TCP-client test harness: its own standalone kernel build
+# (--features tcp_test) + grub config + ISO, same reason as the other
+# *_test harnesses above -- see run_tcp_test.sh's doc comment. Needs
+# net_rtl8139, netstack, and (unlike arp_icmp_test) an actual in-guest
+# fixture again (http_client_test, built by `cap_test` since it's a
+# regression fixture, not a default service).
+CFG_TCPTEST := $(KERNEL_DIR)/grub-tcptest.cfg
+ISO_TCPTEST_PATH := iso-tcptest
+BOOT_TCPTEST_PATH := $(ISO_TCPTEST_PATH)/boot
+GRUB_TCPTEST_PATH := $(BOOT_TCPTEST_PATH)/grub
+ISO_TCPTEST := pcern-tcptest-i386.iso
+
 # Checkpoint K: a host-built FAT32 image for end-to-end fs_fat32 testing
 # (see userland/cap_test/src/bin/fs_client_test.rs), generated on demand
 # via `make test-fat32-image` from the small tracked source files in
@@ -253,6 +265,8 @@ cap_test:
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/reboot_test $(USERLAND_DIR)/reboot_test.bin
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/nic_test $(USERLAND_DIR)/nic_test.bin
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(CAP_TEST_DIR)/target/$(CAP_TEST_TARGET)/$(PROFILE)/http_client_test $(USERLAND_DIR)/http_client_test.bin
 
 .PHONY: iso
 iso: kernel userland
@@ -411,6 +425,29 @@ iso-arptest: kernel-arptest userland
 test-arp: iso-arptest
 	./run_arp_icmp_test.sh $(ISO_ARPTEST)
 
+.PHONY: kernel-tcptest
+kernel-tcptest:
+	cd $(KERNEL_DIR) && $(CARGO) build --$(PROFILE) --features tcp_test
+	grub-file --is-x86-multiboot $(KERNEL_BIN)
+
+.PHONY: iso-tcptest
+iso-tcptest: kernel-tcptest userland cap_test
+	$(MKDIR) $(GRUB_TCPTEST_PATH)
+	$(CP) $(KERNEL_BIN) $(BOOT_TCPTEST_PATH)/pcern.elf
+	$(CP) $(CONSOLE_SERVER_BIN) $(BOOT_TCPTEST_PATH)/console_server.bin
+	$(CP) $(NAMESERVICE_BIN) $(BOOT_TCPTEST_PATH)/nameservice.bin
+	$(CP) $(STORAGE_ATA_BIN) $(BOOT_TCPTEST_PATH)/storage_ata.bin
+	$(CP) $(FS_FAT32_BIN) $(BOOT_TCPTEST_PATH)/fs_fat32.bin
+	$(CP) $(USERLAND_DIR)/http_client_test.bin $(BOOT_TCPTEST_PATH)/http_client_test.bin
+	$(CP) $(NET_RTL8139_BIN) $(BOOT_TCPTEST_PATH)/net_rtl8139.bin
+	$(CP) $(NETSTACK_BIN) $(BOOT_TCPTEST_PATH)/netstack.bin
+	$(CP) $(CFG_TCPTEST) $(GRUB_TCPTEST_PATH)/grub.cfg
+	grub-mkrescue -o $(ISO_TCPTEST) $(ISO_TCPTEST_PATH)
+
+.PHONY: test-tcp
+test-tcp: iso-tcptest
+	./run_tcp_test.sh $(ISO_TCPTEST)
+
 .PHONY: test
 test: iso-test test-fat32-image
 	./run_tests.sh $(ISO_TEST) $(TEST_FAT32_IMG)
@@ -420,6 +457,7 @@ test: iso-test test-fat32-image
 	$(MAKE) test-reboot
 	$(MAKE) test-nic
 	$(MAKE) test-arp
+	$(MAKE) test-tcp
 	$(MAKE) test-disk-boot
 
 .PHONY: test-fat32-image
@@ -500,4 +538,4 @@ clean:
 	cd $(NETSTACK_DIR) && $(CARGO) clean
 	cd $(SHELL_DIR) && $(CARGO) clean
 	cd $(CAP_TEST_DIR) && $(CARGO) clean
-	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(ISO_NICTEST_PATH) $(ISO_NICTEST) $(ISO_ARPTEST_PATH) $(ISO_ARPTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)
+	$(RM) $(ISO_PATH) $(ISO) $(ISO_TEST_PATH) $(ISO_TEST) $(ISO_KEYTEST_PATH) $(ISO_KEYTEST) $(ISO_RAWTEST_PATH) $(ISO_RAWTEST) $(ISO_EDITORTEST_PATH) $(ISO_EDITORTEST) $(ISO_REBOOTTEST_PATH) $(ISO_REBOOTTEST) $(ISO_NICTEST_PATH) $(ISO_NICTEST) $(ISO_ARPTEST_PATH) $(ISO_ARPTEST) $(ISO_TCPTEST_PATH) $(ISO_TCPTEST) $(USERLAND_DIR)/*.bin $(TEST_FAT32_IMG) $(DISK_BUILD_DIR) $(DISK_FAT_IMG) $(DISK_IMG)

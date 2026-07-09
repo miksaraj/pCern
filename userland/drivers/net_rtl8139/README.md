@@ -92,6 +92,13 @@ A client connects once, then issues any number of requests:
 5. Any number of `NIC_OP_RECV` -- blocks until the next frame is
    received (or replies immediately if one was already waiting), with
    its length placed in the shared buffer and returned as `w0`.
+6. Any number of `NIC_OP_TRY_RECV` -- like `NIC_OP_RECV`, but replies
+   immediately either way (`w0` = frame length, `0` if none waiting)
+   instead of deferring the reply when nothing's queued. `netstack`'s
+   TCP client needs this: it can't safely leave a `NIC_OP_RECV`
+   outstanding while it also has to poll an external client for
+   requests (see `userland/services/netstack/README.md` for the
+   deadlock that would otherwise risk).
 
 See `userland/libpcern`'s `nic_connect`/`nic_get_mac`/`nic_send`/
 `nic_recv` for the client-side helpers -- `cap_test`'s `nic_test` and

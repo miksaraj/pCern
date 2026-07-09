@@ -10,6 +10,7 @@ iso-editortest
 iso-reboottest
 iso-nictest
 iso-arptest
+iso-tcptest
 *.iso
 *.o
 *.elf

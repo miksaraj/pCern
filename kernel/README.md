@@ -26,7 +26,8 @@ the way it is.
   (with a badge), transferred between tasks over IPC, and revoked --
   revocation cascades to every capability derived from the revoked one.
 - Rendezvous IPC (`send`/`recv`) addressed by capability slot, not by task
-  ID.
+  ID, plus a non-blocking `try_recv` for the rare task that has to poll
+  more than one independent event source without a `select`.
 - A capability-gated reboot syscall (`SYS_REBOOT`), pulsing the 8042
   keyboard controller's reset line -- the one piece of infrastructure a
   future in-place update mechanism needs beyond a writable boot disk
@@ -91,6 +92,7 @@ grub-editortest.cfg         editor test boot config (make test-editor only)
 grub-reboottest.cfg         reboot-syscall test boot config (make test-reboot only)
 grub-nictest.cfg            NIC-driver test boot config (make test-nic only)
 grub-arptest.cfg            ARP/ICMP responder test boot config (make test-arp only)
+grub-tcptest.cfg            TCP client test boot config (make test-tcp only)
 CHANGELOG.md                this crate's release history (Keep a Changelog + SemVer)
 ```
 

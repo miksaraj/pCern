@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-09
+
+### Added
+
+- `(7, "tcp")` added to the registration allowlist for `netstack`'s new
+  TCP client protocol, which lands at task id 7 in production and the
+  standalone `tcp_test` harness (spawned right after `net_rtl8139`'s id
+  6) -- but *not* asserted the way `net_rtl8139`'s own id is, since
+  `netstack` is deliberately spawned at a different id (5) in the
+  standalone `arp_icmp_test` harness instead, where this registration
+  attempt is a harmless no-op (nothing there ever looks "tcp" up). See
+  the allowlist's own doc comment for the full reasoning.
+
 ## [0.2.0] - 2026-07-04
 
 ### Added

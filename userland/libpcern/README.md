@@ -12,11 +12,13 @@ of its own.
 
 ## What's in here
 
-- **Syscall wrappers** (`send`, `recv`, `exit`, `yield_now`, `getpid`,
-  `register_irq`, `map_memory`, `mem_alloc`, `mem_alloc_pages`,
+- **Syscall wrappers** (`send`, `recv`, `try_recv`, `exit`, `yield_now`,
+  `getpid`, `register_irq`, `map_memory`, `mem_alloc`, `mem_alloc_pages`,
   `create_task`, `endpoint_create`, `cap_mint_badged`, `cap_revoke`,
   `spawn_from_memory`, `reboot`) -- one function per syscall, matching the
-  numbers/argument registers in `kernel/src/syscall.rs`.
+  numbers/argument registers in `kernel/src/syscall.rs`. `try_recv` is the
+  one non-blocking exception among these; see its own doc comment for
+  why it exists at all.
 - **Port I/O helpers** (`inb`/`outb`/`inw`/`outw`/`inl`/`outl`) -- shared
   by every driver that talks to hardware directly (`storage_ata`,
   `net_rtl8139`); only usable by a task actually granted the relevant
@@ -35,6 +37,8 @@ of its own.
   sections.
 - **NIC helpers** (`nic_connect`, `nic_get_mac`, `nic_send`, `nic_recv`)
   -- see `userland/drivers/net_rtl8139/README.md`.
+- **TCP client helpers** (`tcp_connect_setup`, `tcp_open`, `tcp_write`,
+  `tcp_read`, `tcp_close`) -- see `userland/services/netstack/README.md`.
 - **`editor` module** (`editor::Editor`) -- a full-screen text editor's
   core logic (cursor-tracked buffer, key application, ANSI redraw),
   shared between `userland/bin/shell`'s `edit` command and

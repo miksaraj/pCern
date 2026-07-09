@@ -47,7 +47,13 @@ historical context.
   on whatever `nightly` currently resolves to, see `rust-toolchain.toml`)
   stopped accepting the old, architecture-prefixed spelling. Confirmed
   the new spelling still builds correctly on the previously-pinned
-  nightly too, so this is a pure rename, not a behavior change.
+  nightly too, so this is a pure rename, not a behavior change. Every
+  userland crate's own copy of this target spec
+  (`<crate>/i686-pcern-user.json`) carried the same field and needed the
+  identical fix -- caught by CI failing again on the first userland
+  crate in build order (`console_server`) even after the kernel's own
+  copy was fixed, since each crate resolves its target JSON
+  independently rather than sharing the kernel's.
 
 ## [0.7.0] - 2026-07-05
 

@@ -715,6 +715,15 @@ pub fn recv(endpoint_slot: u32) -> RecvResult {
 /// real task id (those start at 1) or `KERNEL_TASK_ID` (`0`).
 pub const NO_MESSAGE: u32 = u32::MAX;
 
+/// `try_recv`'s own error sentinel, distinct from `NO_MESSAGE` -- see
+/// `kernel::ipc::TRY_RECV_ERR`'s own doc comment for why the kernel
+/// needs a separate value here at all. Reported only when the capability
+/// slot passed to `try_recv` doesn't resolve to an Endpoint, which never
+/// happens for a slot this task actually holds -- treated as fatal
+/// below rather than silently retried, since retrying can't fix a slot
+/// number that's simply wrong.
+pub const TRY_RECV_ERR: u32 = u32::MAX - 1;
+
 /// Like `recv`, but returns `None` immediately instead of blocking if
 /// nothing is available yet -- see `kernel/src/ipc.rs`'s `try_recv` for
 /// why this exists at all (a genuine gap: this kernel's IPC has no way
@@ -723,6 +732,9 @@ pub const NO_MESSAGE: u32 = u32::MAX;
 #[allow(dead_code)]
 pub fn try_recv(endpoint_slot: u32) -> Option<RecvResult> {
     let r = unsafe { syscall_raw(SYS_TRY_RECV, endpoint_slot, 0, 0, 0, 0) };
+    if r.eax == TRY_RECV_ERR {
+        exit(1);
+    }
     if r.eax == NO_MESSAGE {
         return None;
     }

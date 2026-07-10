@@ -97,6 +97,18 @@ const NIC_TASK_ID: u32 = 6;
 /// this many bytes in one `TCP_OP_SEND`, and expects a well-behaved
 /// peer's own receive buffer to comfortably exceed it.
 const WINDOW: u16 = 2048;
+/// The largest payload one `TCP_OP_SEND` can actually push in a single
+/// segment -- bounded by what fits in one Ethernet frame after this
+/// client's own fixed-size headers (`tcp::build_segment` never sends
+/// options), which is *not* the same bound as `WINDOW`: `WINDOW` also
+/// serves as the advertised receive window (how much the peer may send
+/// before waiting for more), and that side is fine well past one frame
+/// since inbound data accumulates across many frames into
+/// `TCP_MAX_TRANSFER`. Outbound data doesn't get that -- one
+/// `TCP_OP_SEND` becomes exactly one frame -- so the send path needs its
+/// own, smaller cap alongside `WINDOW`.
+const MAX_SEGMENT_PAYLOAD: usize =
+    libpcern::NIC_MAX_FRAME - proto::ETH_HEADER_LEN - proto::IPV4_HEADER_LEN - tcp::HEADER_LEN;
 /// Also fixed, not randomized: this client only ever performs active
 /// opens (no listen state to protect), so there's nothing here a
 /// sequence-prediction attack would gain over guessing zero -- a
@@ -112,6 +124,18 @@ const INITIAL_SEQ: u32 = 0x0001_0000;
 /// problem. Deliberately generous, since one iteration is often a
 /// single non-blocking poll, not a real wait.
 const MAX_ATTEMPTS: u32 = 2_000_000;
+/// Cap on the idle-poll backoff in the main loop below: each fully idle
+/// round (neither `net_rtl8139` nor the client had anything) doubles how
+/// many times this task calls `yield_now()` before polling again, up to
+/// this many -- otherwise this task would re-issue two syscalls (one to
+/// `net_rtl8139`, one to its own inbox) on every single scheduler slot
+/// forever even with no connection and no client, the one real cost of
+/// this being the one service in this project that busy-polls instead of
+/// blocking when idle (see this module's own top doc comment). Bounded,
+/// not indefinite, the same idiom `MAX_ATTEMPTS` already uses; resets to
+/// 1 the instant either poll finds anything, so a real event is never
+/// delayed by more than one stale backoff step.
+const MAX_IDLE_YIELDS: u32 = 16;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ConnState {
@@ -187,6 +211,7 @@ pub extern "C" fn _start() -> ! {
     let mut conn: Option<Connection> = None;
     let mut pending_op = PendingOp::None;
     let mut buffered_len: usize = 0;
+    let mut idle_yields: u32 = 1;
 
     loop {
         if pending_op != PendingOp::None {
@@ -203,16 +228,19 @@ pub extern "C" fn _start() -> ! {
         let nic_reply = recv_from_nic(&mut stash);
         let len = nic_reply.w0 as usize;
         if len > 0 {
+            idle_yields = 1;
             let nic_buf = unsafe { core::slice::from_raw_parts_mut(NIC_BUF_VIRT as *mut u8, libpcern::NIC_MAX_FRAME) };
-            handle_nic_frame(nic_buf, len, my_mac, nic_slot, &mut conn, &mut pending_op, &mut buffered_len, client_reply);
+            handle_nic_frame(nic_buf, len, my_mac, nic_slot, &mut stash, &mut conn, &mut pending_op, &mut buffered_len, client_reply);
             continue;
         }
 
         if let Some(r) = next_client_message(&mut stash) {
+            idle_yields = 1;
             handle_client_message(
                 r,
                 nic_slot,
                 my_mac,
+                &mut stash,
                 &mut client_buf_mapped,
                 &mut client_reply,
                 &mut conn,
@@ -222,34 +250,43 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
 
-        libpcern::yield_now();
+        for _ in 0..idle_yields {
+            libpcern::yield_now();
+        }
+        idle_yields = (idle_yields * 2).min(MAX_IDLE_YIELDS);
     }
 }
 
 /// Bounded FIFO for client messages that arrive on this inbox while
-/// `recv_from_nic` is specifically waiting for `net_rtl8139`'s reply.
-/// *Not* a single slot: `TCP_OP_SET_BUFFER`/`SET_REPLY` are sent
-/// back-to-back with no reply in between (see `libpcern::tcp_connect_setup`),
-/// so a client can legitimately have more than one message already
-/// queued here before `net_rtl8139` gets around to replying -- a single
-/// `Option` overwrites (silently drops) an earlier one the moment a
-/// second arrives, which is exactly the bug this queue replaces. Sized
-/// generously for how few messages any one client ever has genuinely
-/// unacknowledged at once, not tuned to a specific protocol sequence.
+/// `recv_from_nic`/`send_to_nic` are specifically waiting for
+/// `net_rtl8139`'s reply. *Not* a single slot:
+/// `TCP_OP_SET_BUFFER`/`SET_REPLY` are sent back-to-back with no reply
+/// in between (see `libpcern::tcp_connect_setup`), so a client can
+/// legitimately have both already queued here before `net_rtl8139` gets
+/// around to replying -- a single `Option` overwrites (silently drops)
+/// an earlier one the moment a second arrives, which is exactly the bug
+/// this queue replaces. Sized at exactly 2, the true maximum: every
+/// other client op in this protocol is strictly request-then-reply (the
+/// caller waits for one reply before sending its next request -- see
+/// `libpcern`'s own doc comment on the TCP protocol), so `SET_BUFFER` +
+/// `SET_REPLY` is the only pair of sends this protocol ever produces
+/// without a reply in between.
 struct Stash {
-    items: [Option<RecvResult>; 8],
+    items: [Option<RecvResult>; 2],
     len: usize,
 }
 
 impl Stash {
     const fn new() -> Self {
-        Stash { items: [None; 8], len: 0 }
+        Stash { items: [None; 2], len: 0 }
     }
 
-    /// Drops the message if the queue is somehow already full -- would
-    /// indicate a client sending far more unacknowledged one-way
-    /// messages than this protocol's own request shapes ever produce,
-    /// not a scenario this checkpoint's scope needs to handle gracefully.
+    /// Drops the message if the queue is somehow already full. Given the
+    /// bound above, this can only happen if a caller violates the
+    /// documented one-outstanding-request protocol -- still checked
+    /// (never overflow the array), but not a case that needs recovering
+    /// from gracefully: an external client that doesn't follow the
+    /// protocol has no ordering guarantees to lose in the first place.
     fn push(&mut self, r: RecvResult) {
         if self.len < self.items.len() {
             self.items[self.len] = Some(r);
@@ -282,6 +319,23 @@ fn recv_from_nic(stash: &mut Stash) -> RecvResult {
         }
         stash.push(r);
     }
+}
+
+/// Sends one frame to `net_rtl8139` and waits for its reply, same
+/// contract as `libpcern::nic_send` -- but through `recv_from_nic`
+/// instead of `libpcern::nic_send`'s own internal, unchecked `recv`.
+/// `MY_INBOX` is genuinely shared with the external client role (see
+/// this module's own top doc comment), so any blocking `recv` on it
+/// that isn't sender-filtered can have an external client's message
+/// delivered into it instead of `net_rtl8139`'s actual reply --
+/// `libpcern::nic_send` does exactly that unfiltered `recv`, which is
+/// safe for a task with no other role on its inbox but not safe here.
+/// Every one of this task's own sends to `net_rtl8139` must go through
+/// this function instead, so a client message that arrives in the
+/// interim lands in `stash` like every other client message does.
+fn send_to_nic(nic_slot: u32, stash: &mut Stash, len: u32) -> bool {
+    libpcern::send(nic_slot, libpcern::NIC_OP_SEND, len, 0, 0);
+    recv_from_nic(stash).w0 == 1
 }
 
 /// Returns the next external client message, if any, without blocking --
@@ -326,6 +380,7 @@ fn handle_client_message(
     r: RecvResult,
     nic_slot: u32,
     my_mac: [u8; 6],
+    stash: &mut Stash,
     client_buf_mapped: &mut bool,
     client_reply: &mut u32,
     conn: &mut Option<Connection>,
@@ -347,7 +402,7 @@ fn handle_client_message(
             if *client_reply == 0 {
                 return;
             }
-            if conn.is_some() {
+            if conn.is_some() || !*client_buf_mapped {
                 libpcern::send(*client_reply, 0, 0, 0, 0);
                 return;
             }
@@ -355,7 +410,7 @@ fn handle_client_message(
             let peer_port = r.w2 as u16;
             let nic_buf = unsafe { core::slice::from_raw_parts_mut(NIC_BUF_VIRT as *mut u8, libpcern::NIC_MAX_FRAME) };
             let req_len = proto::build_arp_request(nic_buf, my_mac, STATIC_IP, peer_ip);
-            libpcern::nic_send(nic_slot, MY_INBOX, req_len as u32);
+            send_to_nic(nic_slot, stash, req_len as u32);
             *conn = Some(Connection {
                 peer_ip,
                 peer_port,
@@ -373,7 +428,10 @@ fn handle_client_message(
             }
             match conn.as_mut() {
                 Some(c) if c.state == ConnState::Established && *client_buf_mapped => {
-                    let want = (r.w1 as usize).min(WINDOW as usize).min(libpcern::TCP_MAX_TRANSFER);
+                    let want = (r.w1 as usize)
+                        .min(WINDOW as usize)
+                        .min(libpcern::TCP_MAX_TRANSFER)
+                        .min(MAX_SEGMENT_PAYLOAD);
                     let client_buf = unsafe { core::slice::from_raw_parts(CLIENT_BUF_VIRT as *const u8, libpcern::TCP_MAX_TRANSFER) };
                     let nic_buf = unsafe { core::slice::from_raw_parts_mut(NIC_BUF_VIRT as *mut u8, libpcern::NIC_MAX_FRAME) };
                     let seg_len = tcp::build_segment(
@@ -390,7 +448,7 @@ fn handle_client_message(
                         WINDOW,
                         &client_buf[..want],
                     );
-                    libpcern::nic_send(nic_slot, MY_INBOX, seg_len as u32);
+                    send_to_nic(nic_slot, stash, seg_len as u32);
                     c.snd_nxt = c.snd_nxt.wrapping_add(want as u32);
                     libpcern::send(*client_reply, want as u32, 0, 0, 0);
                 }
@@ -435,7 +493,7 @@ fn handle_client_message(
                         WINDOW,
                         &[],
                     );
-                    libpcern::nic_send(nic_slot, MY_INBOX, seg_len as u32);
+                    send_to_nic(nic_slot, stash, seg_len as u32);
                     c.snd_nxt = c.snd_nxt.wrapping_add(1);
                     c.state = ConnState::FinWait1;
                     c.attempts_left = MAX_ATTEMPTS;
@@ -457,13 +515,14 @@ fn handle_nic_frame(
     len: usize,
     my_mac: [u8; 6],
     nic_slot: u32,
+    stash: &mut Stash,
     conn: &mut Option<Connection>,
     pending_op: &mut PendingOp,
     buffered_len: &mut usize,
     client_reply: u32,
 ) {
     let outcome = match conn.as_mut() {
-        Some(c) => advance_connection(buf, len, my_mac, nic_slot, c, pending_op, buffered_len, client_reply),
+        Some(c) => advance_connection(buf, len, my_mac, nic_slot, stash, c, pending_op, buffered_len, client_reply),
         None => Outcome::NotMine,
     };
 
@@ -472,7 +531,7 @@ fn handle_nic_frame(
         Outcome::Handled => {}
         Outcome::NotMine => {
             if let Some(reply_len) = proto::handle_frame(buf, len, my_mac, STATIC_IP) {
-                libpcern::nic_send(nic_slot, MY_INBOX, reply_len as u32);
+                send_to_nic(nic_slot, stash, reply_len as u32);
             }
         }
     }
@@ -484,32 +543,39 @@ fn advance_connection(
     len: usize,
     my_mac: [u8; 6],
     nic_slot: u32,
+    stash: &mut Stash,
     c: &mut Connection,
     pending_op: &mut PendingOp,
     buffered_len: &mut usize,
     client_reply: u32,
 ) -> Outcome {
+    if c.state == ConnState::ArpPending {
+        let Some(mac) = proto::parse_arp_reply(buf, len, c.peer_ip) else {
+            return Outcome::NotMine;
+        };
+        c.peer_mac = mac;
+        c.state = ConnState::SynSent;
+        c.attempts_left = MAX_ATTEMPTS;
+        let seg_len = tcp::build_segment(
+            buf, my_mac, STATIC_IP, c.peer_mac, c.peer_ip, LOCAL_PORT, c.peer_port, c.snd_nxt, 0, tcp::FLAG_SYN, WINDOW, &[],
+        );
+        send_to_nic(nic_slot, stash, seg_len as u32);
+        return Outcome::Handled;
+    }
+
+    // Every other state is driven by an incoming TCP segment addressed
+    // to this connection -- parse and validate it once here instead of
+    // once per state below.
+    let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
+        return Outcome::NotMine;
+    };
+    if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port {
+        return Outcome::NotMine;
+    }
+
     match c.state {
-        ConnState::ArpPending => {
-            let Some(mac) = proto::parse_arp_reply(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            c.peer_mac = mac;
-            c.state = ConnState::SynSent;
-            c.attempts_left = MAX_ATTEMPTS;
-            let seg_len = tcp::build_segment(
-                buf, my_mac, STATIC_IP, c.peer_mac, c.peer_ip, LOCAL_PORT, c.peer_port, c.snd_nxt, 0, tcp::FLAG_SYN, WINDOW, &[],
-            );
-            libpcern::nic_send(nic_slot, MY_INBOX, seg_len as u32);
-            Outcome::Handled
-        }
+        ConnState::ArpPending => unreachable!("handled above"),
         ConnState::SynSent => {
-            let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port {
-                return Outcome::NotMine;
-            }
             if seg.flags & tcp::FLAG_RST != 0 {
                 if *pending_op == PendingOp::Connect {
                     libpcern::send(client_reply, 0, 0, 0, 0);
@@ -535,7 +601,7 @@ fn advance_connection(
                     WINDOW,
                     &[],
                 );
-                libpcern::nic_send(nic_slot, MY_INBOX, ack_len as u32);
+                send_to_nic(nic_slot, stash, ack_len as u32);
                 if *pending_op == PendingOp::Connect {
                     libpcern::send(client_reply, 1, 0, 0, 0);
                     *pending_op = PendingOp::None;
@@ -545,12 +611,6 @@ fn advance_connection(
             Outcome::NotMine
         }
         ConnState::Established => {
-            let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port {
-                return Outcome::NotMine;
-            }
             if seg.flags & tcp::FLAG_RST != 0 {
                 match *pending_op {
                     PendingOp::Recv => {
@@ -590,7 +650,7 @@ fn advance_connection(
             let ack_len = tcp::build_segment(
                 buf, my_mac, STATIC_IP, c.peer_mac, c.peer_ip, LOCAL_PORT, c.peer_port, seq, c.rcv_nxt, flags, WINDOW, &[],
             );
-            libpcern::nic_send(nic_slot, MY_INBOX, ack_len as u32);
+            send_to_nic(nic_slot, stash, ack_len as u32);
             if fin {
                 c.state = ConnState::LastAck;
                 c.attempts_left = MAX_ATTEMPTS;
@@ -603,12 +663,6 @@ fn advance_connection(
             Outcome::Handled
         }
         ConnState::LastAck => {
-            let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port {
-                return Outcome::NotMine;
-            }
             if seg.flags & tcp::FLAG_ACK != 0 && seg.ack == c.snd_nxt {
                 if *pending_op == PendingOp::Close {
                     libpcern::send(client_reply, 1, 0, 0, 0);
@@ -619,12 +673,6 @@ fn advance_connection(
             Outcome::NotMine
         }
         ConnState::FinWait1 => {
-            let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port {
-                return Outcome::NotMine;
-            }
             if seg.flags & tcp::FLAG_FIN != 0 {
                 c.rcv_nxt = seg.seq.wrapping_add(1);
                 let ack_len = tcp::build_segment(
@@ -641,7 +689,7 @@ fn advance_connection(
                     WINDOW,
                     &[],
                 );
-                libpcern::nic_send(nic_slot, MY_INBOX, ack_len as u32);
+                send_to_nic(nic_slot, stash, ack_len as u32);
                 if *pending_op == PendingOp::Close {
                     libpcern::send(client_reply, 1, 0, 0, 0);
                     *pending_op = PendingOp::None;
@@ -656,17 +704,14 @@ fn advance_connection(
             Outcome::NotMine
         }
         ConnState::FinWait2 => {
-            let Some(seg) = tcp::parse_segment(buf, len, c.peer_ip) else {
-                return Outcome::NotMine;
-            };
-            if seg.dst_port != LOCAL_PORT || seg.src_port != c.peer_port || seg.flags & tcp::FLAG_FIN == 0 {
+            if seg.flags & tcp::FLAG_FIN == 0 {
                 return Outcome::NotMine;
             }
             c.rcv_nxt = seg.seq.wrapping_add(1);
             let ack_len = tcp::build_segment(
                 buf, my_mac, STATIC_IP, c.peer_mac, c.peer_ip, LOCAL_PORT, c.peer_port, c.snd_nxt, c.rcv_nxt, tcp::FLAG_ACK, WINDOW, &[],
             );
-            libpcern::nic_send(nic_slot, MY_INBOX, ack_len as u32);
+            send_to_nic(nic_slot, stash, ack_len as u32);
             if *pending_op == PendingOp::Close {
                 libpcern::send(client_reply, 1, 0, 0, 0);
                 *pending_op = PendingOp::None;

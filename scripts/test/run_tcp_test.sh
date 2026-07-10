@@ -33,6 +33,9 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
+
 ISO="${1:?usage: $0 <tcptest-iso>}"
 BOOT_TIMEOUT="${TEST_TIMEOUT:-60}"
 PORT="${TCP_TEST_PORT:-17735}"
@@ -56,10 +59,11 @@ QEMU_BG_PID=$!
 FAILED=0
 
 python3 - "$PORT" <<'PYEOF'
-import socket
 import struct
 import sys
 import time
+
+from pcern_test_lib import FrameStream, checksum16, connect, send_frame
 
 PORT = int(sys.argv[1])
 
@@ -83,60 +87,6 @@ REQUEST = b"GET / HTTP/1.0\r\nHost: 10.0.2.1\r\n\r\n"
 RESPONSE = b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nZephyrLite OK"
 
 SERVER_ISN = 0x2000_0000
-
-
-def checksum16(data: bytes) -> int:
-    if len(data) % 2:
-        data += b"\x00"
-    total = sum(struct.unpack(f">{len(data) // 2}H", data))
-    while total >> 16:
-        total = (total & 0xFFFF) + (total >> 16)
-    return (~total) & 0xFFFF
-
-
-def connect(port: int) -> socket.socket:
-    for _ in range(200):
-        try:
-            return socket.create_connection(("127.0.0.1", port), timeout=1)
-        except OSError:
-            time.sleep(0.1)
-    print("FAIL: could not connect to QEMU's -netdev socket listener")
-    sys.exit(1)
-
-
-def send_frame(sock: socket.socket, frame: bytes) -> None:
-    if len(frame) < 60:
-        frame = frame + b"\x00" * (60 - len(frame))
-    sock.sendall(struct.pack(">I", len(frame)) + frame)
-
-
-class FrameStream:
-    """See run_arp_icmp_test.sh's identical class for why this buffers
-    partial reads across polling calls."""
-
-    def __init__(self, sock: socket.socket):
-        self.sock = sock
-        self.buf = bytearray()
-
-    def try_recv_frame(self, deadline: float):
-        while True:
-            if len(self.buf) >= 4:
-                length = struct.unpack(">I", self.buf[:4])[0]
-                if len(self.buf) >= 4 + length:
-                    frame = bytes(self.buf[4:4 + length])
-                    del self.buf[:4 + length]
-                    return frame
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                return None
-            self.sock.settimeout(min(remaining, 0.5))
-            try:
-                chunk = self.sock.recv(4096)
-            except socket.timeout:
-                continue
-            if not chunk:
-                raise ConnectionError("peer closed the connection")
-            self.buf += chunk
 
 
 def wait_for(stream: "FrameStream", predicate, deadline: float):
@@ -338,31 +288,18 @@ python3 - "$PCAP" <<'PYEOF'
 import struct
 import sys
 
+from pcern_test_lib import iter_pcap_frames
+
 path = sys.argv[1]
-with open(path, "rb") as f:
-    data = f.read()
-
-if len(data) < 24:
-    print("FAIL: pcap capture is empty or missing")
-    sys.exit(1)
-
-magic = struct.unpack("<I", data[0:4])[0]
-endian = "<" if magic == 0xA1B2C3D4 else ">"
 
 static_ip = bytes([10, 0, 2, 15])
 peer_ip = bytes([10, 0, 2, 1])
-offset = 24
 saw_syn = False
 saw_syn_ack = False
 saw_data = False
 saw_fin = False
 
-while offset + 16 <= len(data):
-    _ts_sec, _ts_usec, incl_len, _orig_len = struct.unpack(endian + "IIII", data[offset:offset + 16])
-    offset += 16
-    frame = data[offset:offset + incl_len]
-    offset += incl_len
-
+for frame in iter_pcap_frames(path):
     if len(frame) < 34 or frame[12:14] != b"\x08\x00":
         continue
     ip = frame[14:34]

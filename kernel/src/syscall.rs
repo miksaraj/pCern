@@ -113,7 +113,12 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
         },
         SYS_TRY_RECV => match resolve_current_cap(regs.ebx) {
             Some((CapKind::Endpoint { id }, _badge)) => ipc::try_recv(id, regs as *mut SavedRegs),
-            _ => regs.eax = ERR,
+            // Deliberately not the shared `ERR` sentinel: `ipc::try_recv`
+            // reports a legitimate empty poll as `ipc::NO_MESSAGE`, which
+            // is also `u32::MAX` -- reusing `ERR` here would make a bad
+            // capability slot indistinguishable from "nothing yet" to
+            // every caller. See `ipc::TRY_RECV_ERR`'s own doc comment.
+            _ => regs.eax = ipc::TRY_RECV_ERR,
         },
         SYS_GETPID => regs.eax = self_id as u32,
         SYS_REGISTER_IRQ => {

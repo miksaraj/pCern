@@ -40,11 +40,15 @@ change it short of rebuilding. Address configuration is later work.
 
 ### TCP scope: fixed window, no congestion control, no retransmission
 
-- **Fixed window**: this client advertises, and caps every `SEND` at, one
-  constant (`WINDOW`, 2048 bytes) for the lifetime of a connection. It
+- **Fixed window**: this client advertises one constant (`WINDOW`, 2048
+  bytes) as its receive window for the lifetime of a connection. It
   never grows or shrinks that cap based on traffic, and never even reads
   the *peer's* own advertised window -- a real flow-control
-  implementation would need both; this doesn't claim to be one.
+  implementation would need both; this doesn't claim to be one. `SEND`
+  is capped separately, by `MAX_SEGMENT_PAYLOAD` (what actually fits in
+  one Ethernet frame after this client's fixed headers, 1464 bytes) --
+  smaller than `WINDOW`, since inbound data can accumulate across many
+  frames but one `SEND` always becomes exactly one frame.
 - **No congestion control**: nothing here tracks round-trip time, ramps a
   congestion window, or reacts to loss signals at all.
 - **No retransmission**: a SYN, data segment, or FIN that's genuinely
@@ -102,18 +106,25 @@ implementation.
   hypothetical one. The fix: `NIC_OP_TRY_RECV` (`net_rtl8139`) and
   `SYS_TRY_RECV` (`try_recv`, the kernel) both reply/return immediately
   either way, never leaving anything outstanding -- the main loop polls
-  both, non-blockingly, yielding once per round when neither has
-  anything. This is the one service in this project that busy-polls
-  instead of blocking when idle; see `kernel/src/ipc.rs`'s `try_recv`
-  doc comment for the full trade-off.
+  both, non-blockingly, backing off with a capped, doubling number of
+  `yield_now` calls each fully idle round (resetting the instant either
+  poll finds something) rather than re-polling both at full rate forever
+  with no connection and no client. This is the one service in this
+  project that busy-polls instead of blocking when idle; see
+  `kernel/src/ipc.rs`'s `try_recv` doc comment for the full trade-off.
 - **A bounded FIFO, not a single slot, for messages that arrive while
   waiting on `net_rtl8139`.** A client's `TCP_OP_SET_BUFFER`/`SET_REPLY`
-  are sent back-to-back with no reply in between, so more than one can
+  are sent back-to-back with no reply in between, so both can
   legitimately be queued before `net_rtl8139` gets around to replying to
   whatever this task most recently asked it -- a single `Option` slot
   silently drops all but the last one the moment a second arrives (a
   real bug caught during this feature's own testing). See `main.rs`'s
-  `Stash`.
+  `Stash`, sized at exactly 2 -- the true maximum, since every other
+  client op in this protocol waits for its own reply before sending the
+  next. Every one of this task's own sends to `net_rtl8139` goes through
+  `send_to_nic`, which drains through this same `Stash` rather than
+  `libpcern::nic_send`'s own unchecked `recv` -- the latter isn't safe to
+  call directly on an inbox this genuinely shared (see the next bullet).
 - One inbox, three roles (the one-shot name-lookup reply at startup,
   `net_rtl8139`'s replies, and an external TCP client's requests) --
   every message received on it is dispatched by checking the

@@ -145,6 +145,17 @@ pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], transfer: Opti
 /// `task_exited` already uses to wake a blocked caller with a failure.
 pub const NO_MESSAGE: u32 = u32::MAX;
 
+/// `SYS_TRY_RECV`'s own error sentinel -- deliberately distinct from
+/// both `NO_MESSAGE` above and the generic `ERR` every other syscall's
+/// bad-capability path uses (both happen to be `u32::MAX`). Unlike a
+/// blocking `SYS_RECV`, where returning early *at all* already means
+/// something failed, `SYS_TRY_RECV` returns early on every single empty
+/// poll by design -- so its error path needs a sentinel a caller can't
+/// confuse with its success-but-empty case. Real task ids start at 1 and
+/// `KERNEL_TASK_ID` is `0`, so `u32::MAX - 1` is exactly as impossible a
+/// genuine sender as `NO_MESSAGE`'s own `u32::MAX`.
+pub const TRY_RECV_ERR: u32 = u32::MAX - 1;
+
 /// The immediate-delivery half of `recv`: if a matching `send` or queued
 /// interrupt notification is already waiting for `endpoint`, writes it
 /// into `regs` (exactly as a woken blocking `recv` would) and returns

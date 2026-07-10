@@ -54,6 +54,12 @@ historical context.
   crate in build order (`console_server`) even after the kernel's own
   copy was fixed, since each crate resolves its target JSON
   independently rather than sharing the kernel's.
+- `SYS_TRY_RECV`'s bad-capability error path returned the same shared
+  `ERR` sentinel every other syscall's error path uses (`u32::MAX`) --
+  identical to `ipc::NO_MESSAGE`, also `u32::MAX`, so a caller had no
+  way to tell a real capability error apart from a legitimate empty
+  poll. Added `ipc::TRY_RECV_ERR` (`u32::MAX - 1`), distinct from both,
+  for this one syscall's error path specifically.
 
 ## [0.7.0] - 2026-07-05
 

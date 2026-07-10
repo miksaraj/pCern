@@ -20,6 +20,47 @@ historical context.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-09
+
+### Added
+
+- `SYS_TRY_RECV` (syscall 15): like `SYS_RECV`, but returns immediately
+  with a `NO_MESSAGE` sentinel instead of blocking when nothing is
+  available for the given endpoint. This kernel's IPC has no `select` --
+  a blocking `recv` can only ever watch one endpoint -- and `netstack`'s
+  new TCP client is the first task that genuinely needs
+  to poll two independent event sources (its own inbox's ARP/ICMP
+  traffic, and an external client's TCP requests) without risking a
+  deadlock from leaving a request outstanding with `net_rtl8139` while
+  it waits on the other. See `ipc::try_recv`'s own doc comment for the
+  full reasoning, including the specific deadlock this avoids.
+- Spawns `http_client_test` (see `userland/cap_test`), `net_rtl8139`,
+  and `netstack` in a new standalone `tcp_test` boot configuration
+  (`grub-tcptest.cfg`, see `make test-tcp`) -- the same relative spawn
+  order as production, so `netstack`'s new "tcp" name registration
+  lands at the id nameservice's ALLOWLIST expects.
+
+### Fixed
+
+- `i686-pcern.json`'s `rustc-abi` field renamed from `"x86-softfloat"`
+  to `"softfloat"` -- an unpinned nightly toolchain (this project floats
+  on whatever `nightly` currently resolves to, see `rust-toolchain.toml`)
+  stopped accepting the old, architecture-prefixed spelling. Confirmed
+  the new spelling still builds correctly on the previously-pinned
+  nightly too, so this is a pure rename, not a behavior change. Every
+  userland crate's own copy of this target spec
+  (`<crate>/i686-pcern-user.json`) carried the same field and needed the
+  identical fix -- caught by CI failing again on the first userland
+  crate in build order (`console_server`) even after the kernel's own
+  copy was fixed, since each crate resolves its target JSON
+  independently rather than sharing the kernel's.
+- `SYS_TRY_RECV`'s bad-capability error path returned the same shared
+  `ERR` sentinel every other syscall's error path uses (`u32::MAX`) --
+  identical to `ipc::NO_MESSAGE`, also `u32::MAX`, so a caller had no
+  way to tell a real capability error apart from a legitimate empty
+  poll. Added `ipc::TRY_RECV_ERR` (`u32::MAX - 1`), distinct from both,
+  for this one syscall's error path specifically.
+
 ## [0.7.0] - 2026-07-05
 
 ### Added

@@ -30,6 +30,7 @@ const SYS_CAP_REVOKE: u32 = 11;
 const SYS_MEM_ALLOC: u32 = 12;
 const SYS_SPAWN_FROM_MEMORY: u32 = 13;
 const SYS_REBOOT: u32 = 14;
+const SYS_TRY_RECV: u32 = 15;
 
 /// Error sentinel returned in `eax` when a capability argument doesn't
 /// resolve to what a syscall needed, or the request is otherwise invalid.
@@ -109,6 +110,15 @@ extern "C" fn syscall_dispatch(regs: *mut SavedRegs) {
         SYS_RECV => match resolve_current_cap(regs.ebx) {
             Some((CapKind::Endpoint { id }, _badge)) => ipc::recv(self_id, id, regs as *mut SavedRegs),
             _ => regs.eax = ERR,
+        },
+        SYS_TRY_RECV => match resolve_current_cap(regs.ebx) {
+            Some((CapKind::Endpoint { id }, _badge)) => ipc::try_recv(id, regs as *mut SavedRegs),
+            // Deliberately not the shared `ERR` sentinel: `ipc::try_recv`
+            // reports a legitimate empty poll as `ipc::NO_MESSAGE`, which
+            // is also `u32::MAX` -- reusing `ERR` here would make a bad
+            // capability slot indistinguishable from "nothing yet" to
+            // every caller. See `ipc::TRY_RECV_ERR`'s own doc comment.
+            _ => regs.eax = ipc::TRY_RECV_ERR,
         },
         SYS_GETPID => regs.eax = self_id as u32,
         SYS_REGISTER_IRQ => {

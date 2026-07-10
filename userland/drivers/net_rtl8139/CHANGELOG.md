@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- `NIC_OP_TRY_RECV`: like `NIC_OP_RECV`, but replies immediately either
+  way (frame length, or `0` if none is waiting) instead of deferring the
+  reply when nothing's queued. `netstack`'s TCP client needs this to
+  poll for frames without ever leaving a `NIC_OP_RECV` outstanding while
+  it also has to check an external client for requests -- leaving one
+  outstanding risks a real deadlock if this driver's own deferred reply
+  and a second request from the same client cross paths (both tasks
+  end up blocked in `send`, neither calling `recv`). See
+  `libpcern::NIC_OP_TRY_RECV`'s own doc comment.
+
 ## [0.1.1] - 2026-07-05
 
 ### Fixed

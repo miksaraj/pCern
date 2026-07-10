@@ -160,6 +160,18 @@ pub extern "C" fn _start() -> ! {
                     recv_armed = true;
                 }
             }
+            libpcern::NIC_OP_TRY_RECV => {
+                if client_reply == 0 {
+                    continue;
+                }
+                if !client_buf_mapped || last_rx_len == 0 {
+                    libpcern::send(client_reply, 0, 0, 0, 0);
+                    continue;
+                }
+                client_buf()[..last_rx_len].copy_from_slice(&last_rx[..last_rx_len]);
+                libpcern::send(client_reply, last_rx_len as u32, 0, 0, 0);
+                last_rx_len = 0;
+            }
             _ => {}
         }
     }

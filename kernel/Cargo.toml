@@ -1,6 +1,6 @@
 [package]
 name = "pcern"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 
 [[bin]]
@@ -59,6 +59,14 @@ nic_test = []
 # netstack never exits the way a test fixture would -- see
 # `make test-arp` and src/main.rs's arp_icmp_test_spawn.
 arp_icmp_test = []
+# Spawns http_client_test (see userland/cap_test), net_rtl8139, and
+# netstack -- its own standalone boot configuration (grub-tcptest.cfg),
+# same reasoning as the other *_test features above. Unlike
+# arp_icmp_test, there's an actual in-guest fixture again
+# (http_client_test drives netstack's new "tcp" protocol against a real
+# peer and checks the result), the same shape as nic_test's own
+# verification -- see `make test-tcp` and src/main.rs's tcp_test_spawn.
+tcp_test = []
 
 [profile.dev]
 panic = "abort"

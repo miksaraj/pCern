@@ -136,6 +136,79 @@ pub fn send(self_id: TaskId, endpoint: EndpointId, msg: [u32; 3], transfer: Opti
     // `regs` and woke us -- nothing left to do.
 }
 
+/// Reserved sender id `recv`/`try_recv` report in `eax` when there was
+/// nothing to deliver -- only `try_recv` can actually return this (a
+/// blocking `recv` never returns at all until something's there); kept
+/// here rather than duplicated in syscall.rs since it's this module's
+/// own contract. Real task ids start at 1 and `KERNEL_TASK_ID` is `0`,
+/// so this never collides with a genuine sender -- the same sentinel
+/// `task_exited` already uses to wake a blocked caller with a failure.
+pub const NO_MESSAGE: u32 = u32::MAX;
+
+/// `SYS_TRY_RECV`'s own error sentinel -- deliberately distinct from
+/// both `NO_MESSAGE` above and the generic `ERR` every other syscall's
+/// bad-capability path uses (both happen to be `u32::MAX`). Unlike a
+/// blocking `SYS_RECV`, where returning early *at all* already means
+/// something failed, `SYS_TRY_RECV` returns early on every single empty
+/// poll by design -- so its error path needs a sentinel a caller can't
+/// confuse with its success-but-empty case. Real task ids start at 1 and
+/// `KERNEL_TASK_ID` is `0`, so `u32::MAX - 1` is exactly as impossible a
+/// genuine sender as `NO_MESSAGE`'s own `u32::MAX`.
+pub const TRY_RECV_ERR: u32 = u32::MAX - 1;
+
+/// The immediate-delivery half of `recv`: if a matching `send` or queued
+/// interrupt notification is already waiting for `endpoint`, writes it
+/// into `regs` (exactly as a woken blocking `recv` would) and returns
+/// `true`. Shared by `recv` (which falls back to actually blocking when
+/// this returns `false`) and `try_recv` (which never blocks at all --
+/// see its own doc comment for why one exists).
+fn try_deliver(endpoint: EndpointId, regs: *mut SavedRegs) -> bool {
+    {
+        let mut sends = PENDING_SENDS.lock();
+        if let Some(pos) = sends.iter().position(|s| s.endpoint == endpoint) {
+            let matched = sends.remove(pos);
+            drop(sends);
+            // Here, unlike in send's matching branch above, the receiver
+            // *is* the currently running task (recv is what just found
+            // this match), so a transferred capability lands directly in
+            // its own CSpace.
+            let installed_slot = matched.transfer.map(scheduler::current_cspace_install).unwrap_or(0);
+            unsafe {
+                (*regs).eax = matched.task_id as u32;
+                (*regs).ebx = matched.msg[0];
+                (*regs).ecx = matched.msg[1];
+                (*regs).edx = matched.msg[2];
+                (*regs).edi = installed_slot;
+                (*matched.regs).eax = 0;
+            }
+            scheduler::wake(matched.task_id);
+            return true;
+        }
+    }
+
+    {
+        let mut events = PENDING_IRQ_EVENTS.lock();
+        if let Some(pos) = events.iter().position(|e| e.endpoint == endpoint) {
+            let event = events.remove(pos);
+            drop(events);
+            // This delivery's own IRQ isn't unmasked until the *next*
+            // recv on this endpoint -- see recv's own doc comment.
+            if let Some(meta) = ENDPOINTS.lock().get_mut(endpoint) {
+                meta.pending_irq_ack = Some(event.irq);
+            }
+            unsafe {
+                (*regs).eax = KERNEL_TASK_ID as u32;
+                (*regs).ebx = event.irq;
+                (*regs).ecx = event.data;
+                (*regs).edx = 0;
+            }
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Takes the next message addressed to `endpoint`: immediately if a
 /// matching `send` (or a queued interrupt notification registered for this
 /// same endpoint -- see `notify_interrupt`) is already waiting, otherwise
@@ -157,48 +230,8 @@ pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
         crate::pic::unmask(irq as u8);
     }
 
-    {
-        let mut sends = PENDING_SENDS.lock();
-        if let Some(pos) = sends.iter().position(|s| s.endpoint == endpoint) {
-            let matched = sends.remove(pos);
-            drop(sends);
-            // Here, unlike in send's matching branch above, the receiver
-            // *is* the currently running task (recv is what just found
-            // this match), so a transferred capability lands directly in
-            // its own CSpace.
-            let installed_slot = matched.transfer.map(scheduler::current_cspace_install).unwrap_or(0);
-            unsafe {
-                (*regs).eax = matched.task_id as u32;
-                (*regs).ebx = matched.msg[0];
-                (*regs).ecx = matched.msg[1];
-                (*regs).edx = matched.msg[2];
-                (*regs).edi = installed_slot;
-                (*matched.regs).eax = 0;
-            }
-            scheduler::wake(matched.task_id);
-            return;
-        }
-    }
-
-    {
-        let mut events = PENDING_IRQ_EVENTS.lock();
-        if let Some(pos) = events.iter().position(|e| e.endpoint == endpoint) {
-            let event = events.remove(pos);
-            drop(events);
-            // This delivery's own IRQ isn't unmasked until the *next*
-            // recv on this endpoint -- see the unmask at the top of this
-            // function.
-            if let Some(meta) = ENDPOINTS.lock().get_mut(endpoint) {
-                meta.pending_irq_ack = Some(event.irq);
-            }
-            unsafe {
-                (*regs).eax = KERNEL_TASK_ID as u32;
-                (*regs).ebx = event.irq;
-                (*regs).ecx = event.data;
-                (*regs).edx = 0;
-            }
-            return;
-        }
+    if try_deliver(endpoint, regs) {
+        return;
     }
 
     PENDING_RECVS.lock().push(PendingRecv {
@@ -209,6 +242,35 @@ pub fn recv(self_id: TaskId, endpoint: EndpointId, regs: *mut SavedRegs) {
     scheduler::block_current();
     // Resumed only once a matching send/notify_interrupt already wrote our
     // result into `regs` and woke us -- nothing left to do.
+}
+
+/// Like `recv`, but never blocks: if nothing is immediately available for
+/// `endpoint`, returns right away with `NO_MESSAGE` in `eax` instead of
+/// suspending the caller.
+///
+/// This kernel's IPC has no `select` -- a blocking `recv` can only ever
+/// watch one endpoint, and there's no way to wait on "whichever of two
+/// endpoints has something first." Every task before Checkpoint Y got by
+/// without that, because each one only ever needed to watch a *single*
+/// event source at a time (its own inbox, whatever else was funneled onto
+/// it disambiguated by sender). `netstack`'s TCP client is the first
+/// task that genuinely needs two: it must stay responsive to ordinary
+/// ARP/ICMP traffic *and* an external client's TCP requests, and it can't
+/// solve that by leaving a request outstanding with `net_rtl8139` while
+/// it waits on the other -- see `libpcern::NIC_OP_TRY_RECV`'s own doc
+/// comment for the deadlock that would risk (both sides blocked in `send`,
+/// each waiting for the other's `recv`, with neither about to call one).
+/// `try_recv` is the narrow way out: poll both sources, non-blockingly,
+/// yielding between rounds when neither has anything -- see
+/// `netstack::main`'s own doc comment for the full loop.
+pub fn try_recv(endpoint: EndpointId, regs: *mut SavedRegs) {
+    if let Some(irq) = ENDPOINTS.lock().get_mut(endpoint).and_then(|e| e.pending_irq_ack.take()) {
+        crate::pic::unmask(irq as u8);
+    }
+
+    if !try_deliver(endpoint, regs) {
+        unsafe { (*regs).eax = NO_MESSAGE };
+    }
 }
 
 /// Forwards a hardware interrupt to whoever holds `endpoint` (registered

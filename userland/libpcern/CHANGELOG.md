@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-09
+
+### Added
+
+- `try_recv`/`SYS_TRY_RECV`: like `recv`, but returns `None` immediately
+  instead of blocking when nothing is available. `netstack`'s TCP client
+  needs it to poll both `net_rtl8139` and an external client's requests
+  without ever leaving a request outstanding with either -- see
+  `kernel/src/ipc.rs`'s own `try_recv` doc comment for the deadlock that
+  would otherwise risk. `RecvResult` now derives `Copy`/`Clone` so a
+  caller can queue results returned this way.
+- TCP client protocol: `TCP_OP_SET_BUFFER`/`SET_REPLY`/`CONNECT`/`SEND`/
+  `RECV`/`CLOSE` and `tcp_connect_setup`/`tcp_open`/`tcp_write`/
+  `tcp_read`/`tcp_close`, mirroring the NIC protocol's own connect-then-
+  request shape (see `userland/services/netstack`).
+- `NIC_OP_TRY_RECV`: like `NIC_OP_RECV`, but replies immediately either
+  way instead of deferring when no frame is waiting -- the non-blocking
+  counterpart `netstack` needs for the same reason `try_recv` above
+  exists at the syscall level.
+
+### Fixed
+
+- `try_recv` couldn't tell a legitimate empty poll apart from the
+  kernel's generic "invalid capability" error -- both were reported as
+  `u32::MAX`. The kernel now returns a distinct `TRY_RECV_ERR` sentinel
+  for the latter (see `kernel/src/ipc.rs`'s own doc comment); `try_recv`
+  treats it as fatal, since retrying can't fix a slot number that's
+  simply wrong.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added

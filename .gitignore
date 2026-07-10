@@ -10,6 +10,7 @@ iso-editortest
 iso-reboottest
 iso-nictest
 iso-arptest
+iso-tcptest
 *.iso
 *.o
 *.elf
@@ -37,6 +38,9 @@ userland/services/netstack/target
 
 # Assembled userland test binaries
 userland/*.bin
+
+# Bytecode cache from importing scripts/test/pcern_test_lib.py
+scripts/test/__pycache__
 
 # Checkpoint K: generated on demand via `make test-fat32-image` from
 # testdata/ -- not committed (see Makefile).

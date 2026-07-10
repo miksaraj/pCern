@@ -21,7 +21,8 @@ const _: () = {
         + cfg!(feature = "editor_test") as u8
         + cfg!(feature = "reboot_test") as u8
         + cfg!(feature = "nic_test") as u8
-        + cfg!(feature = "arp_icmp_test") as u8;
+        + cfg!(feature = "arp_icmp_test") as u8
+        + cfg!(feature = "tcp_test") as u8;
     assert!(
         count <= 1,
         "at most one *_test/test_harness feature may be enabled at a time; build one or the other, never several"
@@ -210,9 +211,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // console-input-driven ones, and would shift every fixture's task id
     // (used throughout run_tests.sh/console_input_test's own script) in
     // the test_harness build for no benefit, since nothing there
-    // exercises it anyway; the standalone `nic_test`/`arp_icmp_test`
-    // harnesses exclude it because their own module lists have no slot
-    // for it at all. Module index 4, spawned *before* spawn_net_rtl8139
+    // exercises it anyway; the standalone `nic_test`/`arp_icmp_test`/
+    // `tcp_test` harnesses exclude it because their own module lists have
+    // no slot for it at all. Module index 4, spawned *before* spawn_net_rtl8139
     // below (module index 5) so shell's own id is always deterministic
     // (5) regardless of whether a NIC is attached -- see
     // spawn_net_rtl8139's own doc comment for why the optional one must
@@ -224,7 +225,8 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
         feature = "editor_test",
         feature = "reboot_test",
         feature = "nic_test",
-        feature = "arp_icmp_test"
+        feature = "arp_icmp_test",
+        feature = "tcp_test"
     )))]
     {
         let shell_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'shell'");
@@ -238,7 +240,7 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // finds one attached (QEMU only emulates one when told to via
     // `-device rtl8139`) -- module index 5, spawned *last* among the
     // deterministic tasks and only in the production path (the
-    // standalone `nic_test`/`arp_icmp_test` harnesses spawn it
+    // standalone `nic_test`/`arp_icmp_test`/`tcp_test` harnesses spawn it
     // separately via their own dedicated module lists). Deliberately
     // last: `spawn_net_rtl8139` returns early without consuming a task
     // id when no card is found, so if anything unconditional were
@@ -253,7 +255,10 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
     // absent, netstack is never spawned either, so no task id past 6 is
     // ever consumed in that case -- the same non-allocation guarantee
     // spawn_net_rtl8139's own doc comment describes, just one link
-    // further down the chain.
+    // further down the chain. This also happens to be exactly the
+    // spawn order nameservice's ALLOWLIST assumes for netstack's own
+    // "tcp" registration (Checkpoint Y): task id 7, right after
+    // net_rtl8139's id 6.
     #[cfg(not(any(
         feature = "test_harness",
         feature = "keyboard_test",
@@ -261,7 +266,8 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
         feature = "editor_test",
         feature = "reboot_test",
         feature = "nic_test",
-        feature = "arp_icmp_test"
+        feature = "arp_icmp_test",
+        feature = "tcp_test"
     )))]
     match spawn_net_rtl8139(5) {
         Some(_) => {
@@ -289,6 +295,9 @@ pub extern "C" fn kernel_main(magic: u32, multiboot_info_addr: u32) -> ! {
 
     #[cfg(feature = "arp_icmp_test")]
     arp_icmp_test_spawn();
+
+    #[cfg(feature = "tcp_test")]
+    tcp_test_spawn();
 
     #[cfg(feature = "reboot_test")]
     reboot_test_spawn();
@@ -626,6 +635,34 @@ fn spawn_netstack(module_index: usize) -> task::TaskId {
 fn arp_icmp_test_spawn() {
     spawn_netstack(4);
     spawn_net_rtl8139(5).expect("arp_icmp_test requires -device rtl8139 in this boot's QEMU invocation");
+}
+
+/// Spawns the standalone TCP-client test harness (see `run_tcp_test.sh`),
+/// only present in a kernel built with `--features tcp_test` (see
+/// `make test-tcp`) -- `grub-tcptest.cfg` is the one grub config whose
+/// module list matches the indices below. Needs the full nameservice/
+/// console_server/storage_ata/fs_fat32 stack the shared code above
+/// always spawns (module indices 0-3), then `http_client_test` (module
+/// 4, task id 5 -- the fixture that actually drives netstack's new
+/// "tcp" protocol and checks the result), `net_rtl8139` (module 5, task
+/// id 6, satisfying its own `assert_eq!`), and `netstack` last (module
+/// 6, task id 7) -- the same relative order production boot uses, so
+/// netstack's "tcp" name registration lands at the id nameservice's
+/// ALLOWLIST actually expects (unlike `arp_icmp_test`, which never
+/// registers "tcp" at all and so doesn't need to preserve this order).
+#[cfg(feature = "tcp_test")]
+fn tcp_test_spawn() {
+    let http_client_test_id = loader::spawn_from_module(4, &[]).expect("no multiboot module 4 found for 'http_client_test'");
+    let http_client_test_endpoint = ipc::create_endpoint(http_client_test_id);
+    grant_endpoint_cap(http_client_test_id, http_client_test_endpoint); // its CSlot 2: its own inbox
+
+    spawn_net_rtl8139(5).expect("tcp_test requires -device rtl8139 in this boot's QEMU invocation");
+    spawn_netstack(6);
+
+    println!(
+        "[ \x1b[1;32mok\x1b[0m ] tcp_test: spawned http_client_test (id={})",
+        http_client_test_id
+    );
 }
 
 extern "C" fn idle_task() -> ! {

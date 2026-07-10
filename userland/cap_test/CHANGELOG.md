@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-09
+
+### Added
+
+- `http_client_test`: proves netstack's minimal TCP client (connect/
+  send/recv/close) against *real* traffic -- opens a TCP connection via
+  netstack's new `"tcp"` protocol, sends a fixed HTTP-shaped request,
+  reads the response back (possibly across more than one `TCP_OP_RECV`
+  call), closes the connection, and checks the exact response bytes.
+  Its own standalone `tcp_test` kernel build/boot config (`make
+  test-tcp`), needing net_rtl8139 and netstack present alongside it,
+  same reasoning as `nic_test`'s own harness. `run_tcp_test.sh`
+  separately verifies the same exchange against a real peer on the wire
+  (a hand-built passive-open TCP responder in Python) and an independent
+  packet capture, independent of anything this fixture itself believes.
+
+### Fixed
+
+- `http_client_test`'s request is now padded well past one Ethernet
+  frame's worth of payload (1639 bytes total, versus the ~1464-byte
+  single-frame capacity a `TCP_OP_SEND` is capped at), sent via a real
+  write loop instead of one `tcp_write` call -- this is a direct
+  regression test for a real bug a code review found and netstack fixed
+  (see its own CHANGELOG): a single oversized `TCP_OP_SEND` used to
+  index straight past netstack's NIC frame buffer and panic, and this
+  fixture's previous ~30-byte request never came close to exercising
+  that path. Confirmed against the actual bug by reverting netstack's
+  fix locally and re-running this test, which panics `netstack` (task
+  exit code 1) exactly as expected without it.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added

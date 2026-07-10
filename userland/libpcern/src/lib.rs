@@ -38,6 +38,7 @@ pub const SYS_CAP_REVOKE: u32 = 11;
 pub const SYS_MEM_ALLOC: u32 = 12;
 pub const SYS_SPAWN_FROM_MEMORY: u32 = 13;
 pub const SYS_REBOOT: u32 = 14;
+pub const SYS_TRY_RECV: u32 = 15;
 
 /// Reserved sender id `recv` reports for interrupts the kernel forwards
 /// (see src/ipc.rs's KERNEL_TASK_ID in the kernel) -- never a real task.
@@ -270,6 +271,18 @@ pub const NIC_OP_SEND: u32 = 4;
 /// the frame's length placed in the shared buffer (`0` = no buffer
 /// mapped).
 pub const NIC_OP_RECV: u32 = 5;
+/// Like `NIC_OP_RECV`, but replies immediately either way instead of
+/// deferring when nothing's waiting -- reply `w0` = the frame's length
+/// (`0` = none waiting right now, or no buffer mapped). Added for
+/// `netstack`'s TCP client (Checkpoint Y): a task that also has to poll
+/// an *external* client for requests can't safely leave a `NIC_OP_RECV`
+/// outstanding while it does (`net_rtl8139` would eventually need to
+/// deliver that deferred reply via a blocking `send` of its own, and if
+/// this task is meanwhile also blocked *sending* something else to
+/// `net_rtl8139`, neither side is left calling `recv` -- a real
+/// deadlock, not a hypothetical one). Polling this instead never leaves
+/// anything outstanding to collide with.
+pub const NIC_OP_TRY_RECV: u32 = 6;
 /// The largest raw Ethernet frame (header + payload, excluding the
 /// 4-byte CRC the card itself appends/strips) this driver will send or
 /// deliver -- must match net_rtl8139's own `MAX_FRAME_SIZE` exactly,
@@ -308,6 +321,83 @@ pub fn nic_send(nic_slot: u32, my_inbox_slot: u32, len: u32) -> bool {
 pub fn nic_recv(nic_slot: u32, my_inbox_slot: u32) -> u32 {
     send(nic_slot, NIC_OP_RECV, 0, 0, 0);
     recv(my_inbox_slot).w0
+}
+
+/// `netstack`'s TCP client protocol, registered as `"tcp"` -- same shape
+/// as `NIC_OP_*` above (`SET_BUFFER`/`SET_REPLY`, then any number of
+/// verb ops), and, like every other driver/service in this project, only
+/// one client at a time. A single shared page carries both directions:
+/// the caller fills it with request bytes before `TCP_OP_SEND`, and
+/// `netstack` fills it with response bytes for `TCP_OP_RECV` to read
+/// back out -- never both at once, since this protocol is strictly
+/// request-then-reply (the caller only ever has one call outstanding).
+pub const TCP_OP_SET_BUFFER: u32 = 1;
+pub const TCP_OP_SET_REPLY: u32 = 2;
+/// `w1` = destination IPv4 address, all 4 bytes packed into one
+/// little-endian word (unlike `pack_name`'s 8-byte names, a 4-byte
+/// address fits in a single message word, so there's no second word to
+/// split it across); `w2` = destination port. Reply `w0` = 1 (connected)
+/// or 0 (failed: peer never resolved or never completed the handshake,
+/// or replied with a reset -- see `netstack::tcp`'s own doc comment for
+/// exactly what's and isn't retried).
+pub const TCP_OP_CONNECT: u32 = 3;
+/// Sends `w0` bytes from the shared buffer. Reply `w0` = bytes actually
+/// sent, which is *all* of `w0` or none of it: this client has exactly
+/// one fixed window and sends at most one window's worth of data for
+/// the lifetime of a connection, never more -- see `netstack::tcp`'s own
+/// scope note.
+pub const TCP_OP_SEND: u32 = 4;
+/// Blocks until data arrives or the peer closes the connection. Reply
+/// `w0` = bytes placed in the shared buffer (`0` = connection closed,
+/// no more data).
+pub const TCP_OP_RECV: u32 = 5;
+/// Closes the connection (a no-op, replying immediately, if the peer
+/// already closed its own end first). Reply `w0` = 1 once fully closed.
+pub const TCP_OP_CLOSE: u32 = 6;
+/// The largest single request or response this client will ever send or
+/// receive over one connection -- one shared page, the same "no
+/// contiguous multi-frame allocation" ceiling every `MemoryGrant` in
+/// this project is already capped at (see `mm::frame` in the kernel).
+pub const TCP_MAX_TRANSFER: usize = 4096;
+
+/// Establishes a connection to `netstack`'s TCP protocol, same shape as
+/// `nic_connect`.
+#[allow(dead_code)]
+pub fn tcp_connect_setup(tcp_slot: u32, buf_grant_slot: u32, my_inbox_slot: u32) {
+    send(tcp_slot, TCP_OP_SET_BUFFER, 0, 0, buf_grant_slot);
+    send(tcp_slot, TCP_OP_SET_REPLY, 0, 0, my_inbox_slot);
+}
+
+/// Opens a TCP connection to `dst_ip:dst_port`. Returns `true` once the
+/// three-way handshake completes.
+#[allow(dead_code)]
+pub fn tcp_open(tcp_slot: u32, my_inbox_slot: u32, dst_ip: [u8; 4], dst_port: u16) -> bool {
+    let packed_ip = u32::from_le_bytes(dst_ip);
+    send(tcp_slot, TCP_OP_CONNECT, packed_ip, dst_port as u32, 0);
+    recv(my_inbox_slot).w0 == 1
+}
+
+/// Sends `len` bytes from the shared buffer (the caller fills it locally
+/// first). Returns the number of bytes actually sent.
+#[allow(dead_code)]
+pub fn tcp_write(tcp_slot: u32, my_inbox_slot: u32, len: u32) -> u32 {
+    send(tcp_slot, TCP_OP_SEND, len, 0, 0);
+    recv(my_inbox_slot).w0
+}
+
+/// Blocks until the next batch of response data is received into the
+/// shared buffer, returning its length (`0` = connection closed).
+#[allow(dead_code)]
+pub fn tcp_read(tcp_slot: u32, my_inbox_slot: u32) -> u32 {
+    send(tcp_slot, TCP_OP_RECV, 0, 0, 0);
+    recv(my_inbox_slot).w0
+}
+
+/// Closes the connection. Blocks until fully closed.
+#[allow(dead_code)]
+pub fn tcp_close(tcp_slot: u32, my_inbox_slot: u32) {
+    send(tcp_slot, TCP_OP_CLOSE, 0, 0, 0);
+    recv(my_inbox_slot);
 }
 
 /// Port I/O helpers, shared by every userland driver that talks to
@@ -596,6 +686,7 @@ pub fn send(dest_slot: u32, w0: u32, w1: u32, w2: u32, transfer_slot: u32) -> i3
     unsafe { syscall_raw(SYS_SEND, dest_slot, w0, w1, w2, transfer_slot) }.eax as i32
 }
 
+#[derive(Clone, Copy)]
 pub struct RecvResult {
     pub sender: u32,
     pub w0: u32,
@@ -618,6 +709,42 @@ pub fn recv(endpoint_slot: u32) -> RecvResult {
         w2: r.edx,
         transferred_slot: r.edi,
     }
+}
+
+/// Reserved sender id a `try_recv` that found nothing reports -- never a
+/// real task id (those start at 1) or `KERNEL_TASK_ID` (`0`).
+pub const NO_MESSAGE: u32 = u32::MAX;
+
+/// `try_recv`'s own error sentinel, distinct from `NO_MESSAGE` -- see
+/// `kernel::ipc::TRY_RECV_ERR`'s own doc comment for why the kernel
+/// needs a separate value here at all. Reported only when the capability
+/// slot passed to `try_recv` doesn't resolve to an Endpoint, which never
+/// happens for a slot this task actually holds -- treated as fatal
+/// below rather than silently retried, since retrying can't fix a slot
+/// number that's simply wrong.
+pub const TRY_RECV_ERR: u32 = u32::MAX - 1;
+
+/// Like `recv`, but returns `None` immediately instead of blocking if
+/// nothing is available yet -- see `kernel/src/ipc.rs`'s `try_recv` for
+/// why this exists at all (a genuine gap: this kernel's IPC has no way
+/// to block on "whichever of two endpoints has something first", and
+/// `netstack` is the first task that needs exactly that).
+#[allow(dead_code)]
+pub fn try_recv(endpoint_slot: u32) -> Option<RecvResult> {
+    let r = unsafe { syscall_raw(SYS_TRY_RECV, endpoint_slot, 0, 0, 0, 0) };
+    if r.eax == TRY_RECV_ERR {
+        exit(1);
+    }
+    if r.eax == NO_MESSAGE {
+        return None;
+    }
+    Some(RecvResult {
+        sender: r.eax,
+        w0: r.ebx,
+        w1: r.ecx,
+        w2: r.edx,
+        transferred_slot: r.edi,
+    })
 }
 
 #[allow(dead_code)]

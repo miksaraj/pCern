@@ -33,16 +33,30 @@ const MAX_ENTRIES: usize = 8;
 /// standalone `nic_test` harness, precisely so that when no RTL8139 is
 /// attached, id 6 is simply never allocated to anything else -- nothing
 /// spawned after it could silently slide into this table's entry for
-/// "net" the way an earlier spawn-order once let shell do). This is a
-/// different crate/binary/address space from the kernel, so there's no
-/// shared constant to enforce the correspondence at compile time -- but
-/// kernel/src/main.rs asserts (a real `assert!`, not `debug_assert!`,
-/// since this must hold in the shipped release binary) that each of
-/// these tasks actually lands at the id this table expects, right after
-/// spawning it, so a spawn-order change that would silently break this
-/// table instead panics loudly at boot.
-const ALLOWLIST: &[(u32, [u8; 8])] =
-    &[(2, *b"console\0"), (3, *b"storage\0"), (4, *b"fs\0\0\0\0\0\0"), (6, *b"net\0\0\0\0\0")];
+/// "net" the way an earlier spawn-order once let shell do), 7 =
+/// `netstack`, spawned right after net_rtl8139 and only when it was
+/// found -- both in production and in the standalone `tcp_test` harness
+/// (Checkpoint Y). This is a different crate/binary/address space from
+/// the kernel, so there's no shared constant to enforce the
+/// correspondence at compile time -- but kernel/src/main.rs asserts (a
+/// real `assert!`, not `debug_assert!`, since this must hold in the
+/// shipped release binary) that net_rtl8139 actually lands at the id
+/// this table expects, right after spawning it, so a spawn-order change
+/// that would silently break this table instead panics loudly at boot.
+/// `netstack`'s own id isn't asserted the same way, because unlike
+/// net_rtl8139 it's deliberately spawned at a *different* id in the
+/// standalone `arp_icmp_test` harness (id 5, ahead of net_rtl8139, to
+/// satisfy net_rtl8139's own assert with one fewer task in that
+/// harness's module list) -- its registration attempt there simply fails
+/// this allowlist check and is a harmless no-op, since nothing in that
+/// harness ever looks "tcp" up.
+const ALLOWLIST: &[(u32, [u8; 8])] = &[
+    (2, *b"console\0"),
+    (3, *b"storage\0"),
+    (4, *b"fs\0\0\0\0\0\0"),
+    (6, *b"net\0\0\0\0\0"),
+    (7, *b"tcp\0\0\0\0\0"),
+];
 
 #[derive(Clone, Copy)]
 struct Entry {

@@ -83,7 +83,11 @@ FLAG_RST = 0x04
 FLAG_PSH = 0x08
 FLAG_ACK = 0x10
 
-REQUEST = b"GET / HTTP/1.0\r\nHost: 10.0.2.1\r\n\r\n"
+# Padded past netstack's own MAX_SEGMENT_PAYLOAD (1464 bytes) on
+# purpose -- see http_client_test.rs's own doc comment. Must stay
+# byte-for-byte identical to that fixture's own REQUEST_PREFIX +
+# PAD_LEN * PAD_BYTE + REQUEST_SUFFIX.
+REQUEST = b"GET /?pad=" + b"A" * 1600 + b" HTTP/1.0\r\nHost: 10.0.2.1\r\n\r\n"
 RESPONSE = b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nZephyrLite OK"
 
 SERVER_ISN = 0x2000_0000

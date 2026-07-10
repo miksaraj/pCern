@@ -99,9 +99,14 @@ pairing up under -- see [CLAUDE.md](../../CLAUDE.md)'s CSlot convention).
   `raw_input_test`, since it exercises real `fs_fat32` writes.
 - **`http_client_test`** -- exercises `netstack`'s TCP client protocol
   end to end: looks up `"tcp"`, opens a connection, sends a fixed
-  HTTP-shaped request, reads the response back (looping `TCP_OP_RECV`
-  until the peer closes, since it may arrive across more than one
-  reply), closes the connection, and checks the response bytes exactly.
+  HTTP-shaped request padded past one Ethernet frame's worth of payload
+  (looping `tcp_write` with whatever the previous call didn't send,
+  since netstack caps a single `TCP_OP_SEND` at one frame -- a direct
+  regression test for a real out-of-bounds panic that cap once had, see
+  netstack's own CHANGELOG), reads the response back (looping
+  `TCP_OP_RECV` until the peer closes, since it may arrive across more
+  than one reply), closes the connection, and checks the response bytes
+  exactly.
   Its own standalone build (`--features tcp_test`, `grub-tcptest.cfg`,
   `make test-tcp`) -- needs `net_rtl8139` and `netstack` present
   alongside it, the same reasoning as `nic_test`'s own harness.

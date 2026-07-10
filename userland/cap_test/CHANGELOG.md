@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a hand-built passive-open TCP responder in Python) and an independent
   packet capture, independent of anything this fixture itself believes.
 
+### Fixed
+
+- `http_client_test`'s request is now padded well past one Ethernet
+  frame's worth of payload (1639 bytes total, versus the ~1464-byte
+  single-frame capacity a `TCP_OP_SEND` is capped at), sent via a real
+  write loop instead of one `tcp_write` call -- this is a direct
+  regression test for a real bug a code review found and netstack fixed
+  (see its own CHANGELOG): a single oversized `TCP_OP_SEND` used to
+  index straight past netstack's NIC frame buffer and panic, and this
+  fixture's previous ~30-byte request never came close to exercising
+  that path. Confirmed against the actual bug by reverting netstack's
+  fix locally and re-running this test, which panics `netstack` (task
+  exit code 1) exactly as expected without it.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added
